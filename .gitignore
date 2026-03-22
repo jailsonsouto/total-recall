@@ -1,0 +1,12 @@
+# OneDrive
+.DS_Store
+desktop.ini
+~$*
+
+# Ambiente
+.env
+*.env.local
+__pycache__/
+*.pyc
+node_modules/
+.venv/
