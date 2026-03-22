@@ -3,17 +3,29 @@
 
 ---
 
-### ADR-001: ChromaDB local para MVP (não Pinecone)
+### ADR-001: SQLite unificado para Hot Store + Warm Store (não ChromaDB, não LanceDB)
 
-**Decisão:** Usar ChromaDB rodando localmente no MVP.
+**Decisão:** Usar SQLite com `sqlite-vec` (vetorial) + FTS5 (keyword) como único banco — Hot Store e Warm Store no mesmo arquivo.
 
 **Motivos:**
-- Custo zero
-- Latência local (sem round-trip de rede)
-- Dados on-premise (nenhum dado de produto sai para cloud)
-- Migration path trivial: `chroma.HttpClient(host="pinecone-endpoint")` quando necessário
+- Volume projetado: 200-300 briefings/ano × 4 PMs × ~15 vetores/briefing ≈ 4.500 vetores/ano
+- Busca O(n) do sqlite-vec é < 5ms até ~200k vetores — escala não atingível neste projeto
+- Um único arquivo SQLite elimina a necessidade de lógica de compensação entre stores
+- Committee Flush vira uma transação ACID nativa (`BEGIN/COMMIT` único) — nunca pode gerar inconsistência
+- Zero dependências novas: SQLite já existe por causa do LangGraph SqliteSaver; FTS5 é built-in
+- sqlite-vec mantido por Alex Garcia (Fly.io) — projeto sólido, não startup de VC
+- Dados nunca saem da máquina; zero custo operacional
 
-**Trade-off aceito:** sem escalabilidade automática no MVP (aceitável para < 1.000 briefings/ano).
+**Descartados:**
+- ChromaDB: adiciona dependência sem entregar nada que sqlite-vec+FTS5 não entrega neste volume
+- LanceDB: projeto jovem (risco real de abandono); IVF-PQ só é relevante acima de ~200k vetores
+- Pinecone: dados estratégicos fora da empresa — nunca
+- PostgreSQL + pgvector: resolve atomicidade, mas exige servidor; complexidade desproporcional ao volume
+
+**Upgrade path (se busca vetorial ultrapassar 200ms):**
+Migrar `SQLiteVectorStore` → `LanceDBVectorStore` em um arquivo. Nenhum agente, nenhum flush, nenhum MIP muda. Estimativa: tarde de trabalho.
+
+**Trade-off aceito:** sem busca ANN aproximada (irrelevante para o volume projetado).
 
 ---
 
@@ -27,7 +39,7 @@
 - Zero configuração de servidor
 - LangGraph SqliteSaver já usa SQLite nativamente
 
-**Trade-off aceito:** não escala para múltiplos PMs simultâneos (sem problema no contexto atual — sistema é de uso individual).
+**Trade-off aceito:** não escala para múltiplos PMs simultâneos (sem problema no contexto atual — 4 PMs, uso não simultâneo).
 
 ---
 
@@ -42,7 +54,7 @@
 - Validado em produção pelo OpenClaw e Nano-claw
 - Zero custo operacional
 
-**Trade-off aceito:** não permite buscas semânticas (para isso existe o Warm Store/ChromaDB).
+**Trade-off aceito:** não permite buscas semânticas (para isso existe o Warm Store — sqlite-vec no mesmo arquivo).
 
 ---
 
@@ -81,7 +93,7 @@ Jay (WhatsApp / Telegram / Slack)
     (traduz mensagem → execução de workflow)
           │
           ▼
-    LangGraph + CrewAI + ChromaDB
+    LangGraph + CrewAI + SQLite (sqlite-vec + FTS5)
     (os 7+1 agentes de análise e memória)
           │
           ▼

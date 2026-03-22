@@ -27,8 +27,10 @@ Transcrição completa: `/TRANSCRICAO-COMPLETA-CHAT-novex-agentes-memoria.md`
 
 ## Stack técnica
 - Python + LangGraph + CrewAI
-- SQLite (WAL mode) + ChromaDB (local → Pinecone em produção)
+- SQLite unificado: WAL mode + sqlite-vec (vetorial) + FTS5 (keyword)
+- nomic-embed-text via Ollama (local, gratuito, 768 dims)
 - Claude Haiku para sínteses / Claude Sonnet para Committee Flush
+- Zero servidores, zero SaaS, zero custo operacional
 
 ## Estágios de maturidade
 | Estágio | Descrição | Prazo |

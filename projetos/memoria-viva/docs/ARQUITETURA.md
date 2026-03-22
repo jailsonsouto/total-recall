@@ -15,15 +15,20 @@ CAMADA HOT — SQLite + LangGraph State
 Tecnologia: SQLite com WAL mode + LangGraph SqliteSaver
 Duração: Enquanto o briefing está ativo → depois arquivado
 
-CAMADA WARM — ChromaDB
+CAMADA WARM — SQLite (sqlite-vec + FTS5)
 "O que é relevante buscar"
-Coleções:
+Tabelas no mesmo arquivo do Hot Store:
+• chunks_vec (sqlite-vec) → busca semântica por proximidade vetorial
+• chunks_fts (FTS5)       → busca por keyword (híbrido)
+• embedding_cache         → cache de vetores já calculados
+Coleções lógicas (campo metadata.collection):
 • brand_memory       → Código Genético embedado
 • briefing_patterns  → padrões de aprovação/rejeição
 • segment_insights   → insights por segmento (HNR)
 • score_calibrations → histórico de calibrações BVS/RICE
 • committee_decisions→ decisões do Comitê
-Tecnologia: ChromaDB local (→ Pinecone em produção)
+Tecnologia: sqlite-vec (extensão local, sem servidor)
+Embedding: nomic-embed-text via Ollama (local, gratuito, 768 dims)
 Duração: Persistente + atualizado pós-briefing
 
 CAMADA COLD — Filesystem (Markdown + Git)
@@ -55,6 +60,7 @@ async def read_memory_for_execution(product_idea, pm_context):
     brand_context = await warm_store.get_always_injected_context()
 
     # 2. Busca semântica por padrões históricos
+    # sqlite-vec: busca por proximidade vetorial no mesmo arquivo SQLite
     historical_patterns = await warm_store.semantic_search(
         query=product_idea,
         collections=["briefing_patterns"],
@@ -249,8 +255,22 @@ CREATE TABLE memory_patterns (
 | Necessidade | Solução |
 |---|---|
 | Memória calibrável (BVS Preditivo vs Real) | Hot Store + calibration engine |
-| Memória estruturada por evento (Comitê) | Committee Memory Flush com WAL mode |
-| Memória semântica buscável | ChromaDB com embeddings |
+| Memória estruturada por evento (Comitê) | Committee Memory Flush — transação ACID única (Hot + Warm no mesmo SQLite) |
+| Memória semântica buscável | sqlite-vec (vetorial) + FTS5 (keyword) — busca híbrida |
 | Memória partilhada entre agentes | Estado compartilhado via LangGraph |
+
+**Stack completa — zero servidores, zero SaaS:**
+```
+novex-memory.db (único arquivo SQLite)
+├── briefing_threads      ← Hot Store
+├── score_calibrations    ← Hot Store
+├── memory_patterns       ← Hot Store
+├── chunks_vec            ← Warm Store vetorial (sqlite-vec)
+├── chunks_fts            ← Warm Store keyword (FTS5 built-in)
+└── embedding_cache       ← cache de vetores
+
+Embedding: nomic-embed-text via Ollama (local, 768 dims, gratuito)
+Upgrade path: LanceDB quando busca > 200ms (troca 1 arquivo, 0 agentes mudam)
+```
 
 Nem a memória nativa do Claude (opaca, gerenciada pela Anthropic) nem o OpenClaw sozinho (sem RAG, sem paralelismo) resolveriam essas 4 necessidades. A Memória Viva é a síntese necessária.
