@@ -142,3 +142,51 @@ Basecamp API — busca to-dos concluídos/arquivados desde último check
 **Descartado:** webhook push (exigiria URL pública acessível pelo Basecamp — ngrok ou servidor, complexidade desnecessária para este volume e latência aceitável).
 
 **Trade-off aceito:** latência de até 15 minutos entre decisão do Comitê e flush na memória (irrelevante — o próximo briefing não começa em 15 minutos).
+
+---
+
+### ADR-007: BVS Real — inserção manual em fases (não bloquear por metodologia indefinida)
+
+**Contexto:**
+O BVS Preditivo é calculado pelo Agente 2 antes do lançamento. O BVS Real só existe após o lançamento — e depende de uma metodologia de medição que a Embelleze/Novex ainda está desenvolvendo (inspirada na Interbrand e na metodologia Ana Couto). A Aresta 3 era: quem insere o `bvs_real` e quando?
+
+**Decisão:** Não bloquear a implementação aguardando a metodologia definitiva. Implementar o campo `bvs_real` com inserção manual via CLI, usando proxy operacional simples na Fase 1. A metodologia evolui sobre dados reais — o contrato do campo permanece estável.
+
+**Implementação em fases:**
+
+```
+FASE 1 — PROXY OPERACIONAL (MVP, sem custo)
+Quem insere: Jay, via CLI (~3 meses pós-lançamento)
+O que insere: sell-through Onda 1 vs projetado (%)
+
+Normalização:
+  ≥ 90% do projetado → bvs_real = bvs_preditivo × 1.1
+  70–89%             → bvs_real = bvs_preditivo × 0.9
+  < 70%              → bvs_real = bvs_preditivo × 0.7
+
+FASE 2 — COMPOSITE (quando metodologia amadurecer)
+  40% sell-through Onda 1+2
+  30% ABSA retrospectivo (Agente 4, 6 meses pós-lançamento)
+  30% pesquisa de percepção Ana Couto (se disponível)
+
+FASE 3 — METODOLOGIA PRÓPRIA
+  Quando BVS virar metodologia interna formalizada,
+  apenas a fonte de dados muda — o campo e o motor de
+  calibração permanecem inalterados.
+```
+
+**O que o sistema faz com o bvs_real:**
+- Calcula desvio: `bvs_preditivo − bvs_real` por briefing
+- Após 5 pontos de dados: detecta viés sistemático por segmento/Onda
+- Atualiza `score_calibrations` com ajuste (Bayesian updating)
+- Meta G2: desvio < 15% após 10 lançamentos
+
+**Motivos:**
+- O valor do sistema não está em prever perfeitamente — está em saber o quanto erra e em qual direção
+- O campo `bvs_real` é um contrato arquitetural: "em algum momento, a realidade fala aqui"
+- Proxy imperfeita que gira o loop > metodologia perfeita que paralisa a implementação
+- Inspiração Interbrand: eles também levaram anos para refinar a metodologia — começaram com proxies financeiras simples
+
+**Descartado:** aguardar definição completa da metodologia BVS antes de implementar (risco de paralisia; o campo pode aceitar qualquer valor numérico 0–10 independente da fonte).
+
+**Trade-off aceito:** BVS Real da Fase 1 é uma proxy de desempenho comercial, não de percepção de marca — desvio entre as duas dimensões será corrigido nas fases seguintes à medida que a metodologia amadurece.
