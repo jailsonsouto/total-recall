@@ -325,121 +325,209 @@ ChromaDB não aparece em lugar nenhum no OpenClaw.
 
 ### 👤 Jay
 
-Ao escolher entre LanceDB, SQLite, ChromaDB, Pinecone ou Milvus, fico travado no vendor? Os embeddings não migram para outros bancos de concorrentes, certo? Como isso afetaria o futuro do meu agente de memória e o framework de uma maneira geral? Quero respostas longas, explicativas e professorais. Faz uma explicação contextualizada de tudo que envolve a "memória viva". Coloque no contexto do meu processo de discovery, ideação e briefing.
+Ao escolher entre LanceDB, SQLite, ChromaDB, Pinecone ou Milvus, fico travado no vendor? Os embeddings não migram para outros bancos de concorrentes, certo? Como isso afetaria o futuro do meu agente de memória e o framework de uma maneira geral? Quero respostas longas, explicativas e professorais. Faz uma explicação contextualizada de tudo que envolve a "memória viva". Coloque no contexto do meu processo de discovery, ideação e briefing. Claude, seja um professor universitário nível ivy league nesse momento. Seja didático, faça esquemas, gráficos ou use qualquer subterfúgio para tornar claro esse processo.
 
 ---
 
 ### 🤖 Claude
 
-*(Aula completa — 9 partes)*
+# Uma Aula sobre Portabilidade de Memória Vetorial
+## O que você precisa saber antes de construir a Memória Viva
 
 ---
 
-#### Parte 1 — A Anatomia de um Embedding
+#### PARTE 1 — A Anatomia de um Embedding
 
-Um embedding é literalmente uma lista de números:
+Antes de falar de bancos, precisamos entender o que você está guardando.
+
+Quando o Agente 8 processa "sérum de transição capilar com claim de 48h", ele não salva a frase. Ele salva isso:
 
 ```
 "sérum de transição capilar com claim de 48h"
          │
          ▼
-  Modelo de Embedding (text-embedding-3-small)
+  Modelo de Embedding
+  (text-embedding-3-small)
          │
          ▼
-[0.023, -0.412, 0.891, 0.034, ..., 0.087]  ← 1.536 números decimais
+[0.023, -0.412, 0.891, 0.034, -0.201, ..., 0.087]
+         └────────────────────────────────────┘
+                    1.536 números decimais
+              = 1 vetor no espaço semântico
 ```
 
-O banco de vetores **só guarda esses números e os procura eficientemente**. É um bucket de floats com capacidade de busca. Nada mais.
+Esse vetor é a **representação matemática do significado** da frase. Duas ideias parecidas no mundo real ficam próximas nesse espaço de 1.536 dimensões — é isso que permite a busca semântica.
+
+O banco de vetores (SQLite, LanceDB, ChromaDB, Pinecone) **só guarda esses números e os procura eficientemente**. É um bucket de floats com capacidade de busca. Nada mais.
+
+Esse ponto é crítico para entender o vendor lock-in.
 
 ---
 
-#### Parte 2 — Onde o Lock-in Realmente Vive
+#### PARTE 2 — Onde o Lock-in Realmente Vive
+
+A maioria das pessoas pensa que o lock-in está no banco. **Está errado.** O lock-in está no **modelo de embedding**.
 
 ```
-LOCK-IN REAL → MODELO DE EMBEDDING (quem gera os vetores)
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║   MODELO DE EMBEDDING          ← LOCK-IN REAL               ║
+║   (quem gera os vetores)                                     ║
+║                                                              ║
+║   OpenAI text-embedding-3-small  → 1.536 dimensões          ║
+║   Google gemini-embedding-001    →   768 dimensões          ║
+║   Voyage voyage-4-large          → 1.024 dimensões          ║
+║   nomic-embed-text (local)       →   768 dimensões          ║
+║                                                              ║
+║   REGRA DE OURO:                                             ║
+║   Todos os vetores no banco DEVEM ser do MESMO               ║
+║   modelo. Vetores de modelos diferentes são                  ║
+║   matematicamente incomparáveis.                             ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
 
-  OpenAI text-embedding-3-small  → 1.536 dimensões
-  Google gemini-embedding-001    →   768 dimensões
-  nomic-embed-text (local)       →   768 dimensões
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║   BANCO DE VETORES              ← PORTÁVEL                   ║
+║   (onde os números ficam guardados)                          ║
+║                                                              ║
+║   SQLite | LanceDB | ChromaDB | Pinecone | Milvus            ║
+║                                                              ║
+║   Os números viajam livremente entre qualquer                ║
+║   desses bancos. É só exportar e importar.                   ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+```
 
-  REGRA DE OURO: todos os vetores no banco DEVEM ser do MESMO modelo.
-  Trocar o modelo = re-embedar tudo do zero.
+**Por que o modelo é o lock-in?**
 
-PORTÁVEL → BANCO DE VETORES (onde os números ficam guardados)
+Imagine que você passou um ano gerando embeddings com `text-embedding-3-small` da OpenAI. Acumulou 50 briefings, cada um com 8 chunks = 400 vetores armazenados, todos em 1.536 dimensões.
 
-  SQLite | LanceDB | ChromaDB | Pinecone | Milvus
+Agora a OpenAI muda sua política de preços. Você quer migrar para um modelo local gratuito. Problema: o modelo local gera vetores em 768 dimensões. Os 400 vetores antigos vivem em um espaço de 1.536 dimensões. **Você não pode comparar diretamente vetores de dimensões diferentes** — é como tentar medir distâncias em metros e pés sem converter. Você teria que re-embedar **todo** o banco do zero com o novo modelo.
 
-  Migração: export floats → import floats. 30 linhas de Python.
-  Os vetores viajam livremente entre qualquer desses bancos.
+**Mas mudar de SQLite para LanceDB?** Isso é uma exportação de arrays de floats. Trivial:
+
+```python
+# Migração SQLite → LanceDB em 10 linhas
+rows = sqlite.execute("SELECT id, embedding, text, metadata FROM chunks_vec").fetchall()
+
+lance_table = lancedb.create_table("briefing_patterns", data=[
+    {"id": r.id, "vector": json.loads(r.embedding), "text": r.text}
+    for r in rows
+])
+# Pronto. Todos os vetores migraram. Zero perda.
+```
+
+Os números são os mesmos. Só mudou a casinha onde moram.
+
+---
+
+#### PARTE 3 — A Pilha Completa (4 Camadas)
+
+Para planejar sem se perder, visualize o sistema como 4 camadas independentes:
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║  CAMADA 1 — MODELO DE EMBEDDING           (LOCK-IN REAL)    ║
+║                                                              ║
+║  É o "dicionário" que traduz texto → números.               ║
+║  Todos os vetores no banco DEVEM ter vindo do mesmo         ║
+║  dicionário. Trocar o dicionário = re-embedar tudo.         ║
+║                                                              ║
+║  Opções:                                                     ║
+║  • OpenAI text-embedding-3-small  — pago, 1.536 dims        ║
+║  • Google gemini-embedding-001    — pago, 768 dims          ║
+║  • nomic-embed-text (via Ollama)  — GRÁTIS, local, 768 dims ║
+║  • all-MiniLM-L6-v2               — GRÁTIS, local, 384 dims ║
+╠══════════════════════════════════════════════════════════════╣
+║  CAMADA 2 — STORE DE VETORES              (PORTÁVEL)        ║
+║                                                              ║
+║  É o bucket que guarda os floats e busca por proximidade.   ║
+║  Trocar de store = export + import. Vetores viajam.         ║
+║                                                              ║
+║  SQLite → LanceDB → ChromaDB → Pinecone → Milvus            ║
+╠══════════════════════════════════════════════════════════════╣
+║  CAMADA 3 — ÍNDICE DE BUSCA               (PERFORMANCE)     ║
+║                                                              ║
+║  É o algoritmo que acelera a busca.                         ║
+║  Flat (força bruta, O(n)) | HNSW | IVF-PQ                  ║
+║  Não afeta os dados — é um índice, como no SQL.             ║
+╠══════════════════════════════════════════════════════════════╣
+║  CAMADA 4 — INTERFACE DE QUERY            (API/CLIENT)      ║
+║                                                              ║
+║  É como você pergunta ao banco.                             ║
+║  Python client | REST | gRPC                                ║
+║  Diferente entre bancos — é a parte que você reescreve      ║
+║  numa migração. Normalmente 1-2 arquivos de código.         ║
+╚══════════════════════════════════════════════════════════════╝
 ```
 
 ---
 
-#### Parte 3 — A Pilha Completa (4 Camadas)
+#### PARTE 4 — Os 5 Candidatos, Honestamente
 
-```
-╔══════════════════════════════════════════════════════╗
-║  CAMADA 1 — MODELO DE EMBEDDING    (LOCK-IN REAL)   ║
-║  Traduz texto → números. Trocar = re-embedar tudo.  ║
-╠══════════════════════════════════════════════════════╣
-║  CAMADA 2 — STORE DE VETORES       (PORTÁVEL)       ║
-║  Guarda floats e busca por proximidade.             ║
-╠══════════════════════════════════════════════════════╣
-║  CAMADA 3 — ÍNDICE DE BUSCA        (PERFORMANCE)    ║
-║  Flat O(n) | HNSW | IVF-PQ                         ║
-╠══════════════════════════════════════════════════════╣
-║  CAMADA 4 — INTERFACE DE QUERY     (API/CLIENT)     ║
-║  Diferente entre bancos — 1-2 arquivos de código.  ║
-╚══════════════════════════════════════════════════════╝
-```
-
----
-
-#### Parte 4 — Os 5 Candidatos, Honestamente
+Agora que você entende a pilha, avalie cada banco pelo que ele realmente é:
 
 | | SQLite vec | LanceDB | ChromaDB | Pinecone | Milvus |
 |---|---|---|---|---|---|
-| Onde roda | Arquivo local | Arquivo local | Local ou server | CLOUD ONLY (SaaS) | Docker obrigatório |
-| Busca | O(n) flat | IVF-PQ (rápida) | HNSW (rápida) | HNSW/cloud | IVF-PQ/HNSW |
+| Onde roda | Arquivo .db local | Arquivo local | Local ou servidor | CLOUD ONLY (SaaS) | Servidor/Docker obrigatório |
+| Busca vetorial | O(n) flat (lenta >100k) | IVF-PQ (rápida) | HNSW (rápida) | HNSW/cloud (rápida) | IVF-PQ / HNSW (rápida >1M vecs) |
 | FTS5 híbrido | SIM nativo | Não (manual) | Não (manual) | Não (pago extra) | Não (manual) |
-| Custo | Zero | Zero | Zero | $$$ | Zero (infra própria) |
-| Seus dados | Na sua máquina | Na sua máquina | Na sua máquina | NA NUVEM DELES | Na sua máquina |
-| Validado OpenClaw | SIM (built-in) | SIM (extensão) | Não | Não | Não |
-| Adequado para | ~100k vetores | 100M+ vetores | ~1M vetores | Qualquer escala | Bilhões |
+| Custo operacional | Zero | Zero | Zero local | $$$ | Zero (infra própria) |
+| Seus dados ficam | Na sua máquina | Na sua máquina | Na sua máquina | NA NUVEM DELES | Na sua máquina |
+| Validado OpenClaw | SIM (built-in) | SIM (extensão oficial) | Não | Não | Não |
+| Adequado para | Até ~100k vetores | Até 100M+ vetores | Até 1M vetores | Qualquer escala | Bilhões de vetores |
 
 ---
 
-#### Parte 5 — O Risco Real do Pinecone para Este Caso
+#### PARTE 5 — O Risco Real de Pinecone e Milvus para o Seu Caso
+
+Este ponto merece atenção especial antes de qualquer decisão.
+
+**Pinecone — o risco que não parece risco:**
 
 ```
-O que mora na Memória Viva:
-• "claim de duração sem P&D" → REJEITADO
-• "portfólio canibaliza transição capilar" → REJEITADO
-• "BVS sistematicamente superestima 8% em Onda 1" → calibração
-• Gaps de portfólio por segmento
+BRIEFING REJECTED — "claim de duração sem P&D"
+BRIEFING REJECTED — "portfólio canibaliza transição capilar"
+BRIEFING APPROVED — "hidratação foco em identidade, não resultado"
+SCORE CALIBRATION — "BVS sistematicamente superestima 8% em Onda 1"
 
-= repositório estratégico de inteligência de produto da Embelleze
+Isso é o que mora na Memória Viva.
+Isso é o repositório estratégico de inteligência de produto da Embelleze.
 
 Com Pinecone: esses dados vivem em servidores da Pinecone Inc., EUA.
-LGPD + confidencialidade competitiva: risco real.
+LGPD, GDPR, confidencialidade competitiva: risco real.
+Se a Pinecone mudar de preço, ser comprada, ou ter um breach: seu ativo
+estratégico está exposto. Pinecone não tem opção "bring your own key"
+para dados em repouso.
 ```
+
+Milvus não tem o problema de privacidade (você hospeda), mas tem um problema diferente: **infraestrutura pesada** (precisa de Docker, Kubernetes para produção, equipe de Ops). É uma solução para 50 engenheiros gerenciando bilhões de vetores. Não para um sistema que terá 5.000 vetores em 10 anos.
 
 ---
 
-#### Parte 6 — A Abstração que Torna Tudo Portável
+#### PARTE 6 — A Abstração que Torna Tudo Portável
+
+Esta é a resposta de engenharia para o seu medo de ficar travado. A solução não é escolher o banco "certo para sempre" — é **projetar o código para que o banco seja substituível em 2 arquivos**.
 
 ```python
+# O padrão que elimina o lock-in de BANCO
+
 class EmbeddingProvider(ABC):
     @abstractmethod
-    def embed(self, text: str) -> list[float]: pass
+    def embed(self, text: str) -> list[float]:
+        pass
 
 class VectorStore(ABC):
     @abstractmethod
     def upsert(self, id: str, vector: list[float], metadata: dict): pass
+
     @abstractmethod
     def search(self, vector: list[float], n: int) -> list[SearchResult]: pass
 
-# MVP: SQLite
+# ─────────────────────────────────────────────
+# MVP: tudo em SQLite (zero infraestrutura)
+# ─────────────────────────────────────────────
 class SQLiteVectorStore(VectorStore):
     def search(self, vector, n):
         return self.db.execute(
@@ -447,115 +535,213 @@ class SQLiteVectorStore(VectorStore):
             [json.dumps(vector), n]
         )
 
-# Escala: LanceDB — ZERO mudança nos agentes
+# ─────────────────────────────────────────────
+# Escala: LanceDB (substitui SQLiteVectorStore)
+# ZERO mudança nos agentes, no Agente 8, no MIP
+# ─────────────────────────────────────────────
 class LanceDBVectorStore(VectorStore):
     def search(self, vector, n):
         return self.table.search(vector).limit(n).to_list()
 
+# ─────────────────────────────────────────────
 # O Agente 8 nunca vê qual store está em uso
+# ─────────────────────────────────────────────
 class MemorySearchEngine:
     def __init__(self, embed: EmbeddingProvider, store: VectorStore):
         self.embed = embed
         self.store = store
 
     def search(self, query: str, n: int = 5) -> list[SearchResult]:
-        vector = self.embed.embed(query)
-        return self.store.search(vector, n)
+        vector = self.embed.embed(query)          # camada 1
+        return self.store.search(vector, n)        # camada 2
 ```
 
 Com isso:
-- Trocar SQLite → LanceDB: 1 arquivo muda
-- Trocar OpenAI → modelo local: 1 arquivo muda
-- Todos os 7 agentes, MIP, Committee Flush: zero alterações
+- **Trocar SQLite → LanceDB**: instancia `LanceDBVectorStore` em vez de `SQLiteVectorStore`. Um arquivo muda.
+- **Trocar OpenAI → modelo local**: instancia `NomicEmbedProvider` em vez de `OpenAIEmbedProvider`. Um arquivo muda.
+- **Todos os 7 agentes, o MIP, o Committee Flush**: zero alterações.
 
 ---
 
-#### Parte 7 — O Risco para o Framework dos 7+1 Agentes
+#### PARTE 7 — O Risco Real para o Seu Framework (Os 7+1 Agentes)
+
+Voltando ao projeto inteiro. O impacto de uma escolha errada de embedding model vai além do Agente 8:
 
 ```
-Cenário sem abstração:
-OpenAI muda preço de text-embedding-3-small em 2028
-→ Pipeline de injeção de contexto quebra
-→ Re-embedar 150 briefings acumulados
-→ Validar qualidade da busca
-→ Possível regressão no Agente 1
+HOJE: Jay submete "sérum de transição" via OpenClaw
+      │
+      ▼
+Agente 8 (Memory Read)
+  → embed("sérum de transição")    usando OpenAI text-embedding-3-small
+  → busca vetores similares
+  → injeta contexto nos Agentes 1, 2, 4, 5
 
-Cenário com abstração:
+      │
+      ▼
+Agentes 1, 2, 4, 5 recebem contexto relevante
+      │
+      ▼
+Briefing gerado com inteligência acumulada
+
+EM 2 ANOS: OpenAI muda preço ou descontinua text-embedding-3-small
+
+Se o modelo foi escolhido SEM abstração:
+→ Todo o pipeline de injeção de contexto quebra
+→ Re-embedar 150 briefings acumulados do zero
+→ Validar que a qualidade da busca se manteve
+→ Possível regressão na qualidade do Agente 1
+
+Se o modelo foi escolhido COM abstração:
 → Troca EmbeddingProvider em 1 arquivo
-→ Script de re-embedding: 30 minutos
+→ Script de re-embedding: 30 minutos de processamento
 → Nenhum outro arquivo muda
 ```
 
+**A Memória Viva é a fundação de todos os outros agentes.** Qualquer instabilidade nela contamina os 7. Portanto o princípio de design é: **nenhum agente sabe qual embedding model ou qual vector store está em uso**.
+
 ---
 
-#### Parte 8 — A Decisão Estratégica
+#### PARTE 8 — A Decisão Estratégica
+
+Com tudo isso, a resposta para o seu projeto:
 
 ```
-DECISÃO 1 — MODELO DE EMBEDDING (lock-in real)
+DECISÃO 1 — MODELO DE EMBEDDING
+(onde está o lock-in real)
 
 Recomendação: nomic-embed-text via Ollama (local, gratuito)
-  ✓ Zero dependência de API externa
-  ✓ Dados nunca saem da máquina
-  ✓ 768 dimensões — adequado para o volume
-  ✓ Re-embedar é um script, não uma crise
 
-Alternativa: text-embedding-3-small (OpenAI)
-  → Melhor qualidade semântica geral
-  → Dependência de API + custo crescente
+Por quê:
+✓ Zero dependência de API externa
+✓ Dados nunca saem da máquina
+✓ 768 dimensões — adequado para o volume do projeto
+✓ Qualidade comparável a text-embedding-3-small para domínios específicos
+✓ Se precisar melhorar: re-embedar é um script, não uma crise
 
-DECISÃO 2 — VECTOR STORE (portável)
+Alternativa aceitável: text-embedding-3-small (OpenAI)
+→ Melhor qualidade semântica geral
+→ Dependência de API + custo crescente
+→ Use SE o modelo local provar qualidade insuficiente
 
-MVP:    SQLite FTS5 + chunks_vec
-        → Zero dependência nova (já existe no LangGraph)
-        → Busca híbrida (vetorial + keyword) nativa
-        → Adequado para os primeiros 3-5 anos
+───────────────────────────────────────────────────────
+
+DECISÃO 2 — VECTOR STORE
+(portável, mas vale escolher bem)
+
+MVP: SQLite chunks_vec + FTS5
+→ Zero dependência nova (já existe por causa do LangGraph)
+→ Busca híbrida (vetorial + keyword) nativa
+→ Basta para os primeiros 3-5 anos de operação
 
 Escala: LanceDB
-        → Quando? Busca SQLite > 200ms
-        → Migração: 30 linhas, 0 mudanças nos agentes
-        → Caminho validado pelo próprio OpenClaw
+→ Quando? Quando a busca SQLite ultrapassar 200ms
+→ Migração: script de 30 linhas, 0 mudanças nos agentes
+→ Mantém filosofia local-first do OpenClaw
+→ O próprio OpenClaw já validou esse upgrade path
 
-Nunca:  Pinecone (dados saem da empresa)
-Nunca:  Milvus (infraestrutura desproporcional)
-ChromaDB: tecnicamente ok, mas sem vantagem sobre SQLite+LanceDB
-          para este projeto
+Nunca para este projeto: Pinecone (dados saem da empresa)
+Nunca para este projeto: Milvus (infraestrutura desproporcional)
+ChromaDB: tecnicamente ok, mas não oferece nada que SQLite+LanceDB
+não ofereça — e adiciona uma dependência sem o histórico do OpenClaw
 
-DECISÃO 3 — ABSTRAÇÃO
+───────────────────────────────────────────────────────
 
-EmbeddingProvider + VectorStore como interfaces.
+DECISÃO 3 — A ABSTRAÇÃO
+(o que elimina o medo de lock-in)
+
+EmbeddingProvider + VectorStore como interfaces
+implementadas em 2 arquivos separados.
+
 Qualquer troca = modificar 1 arquivo + script de migração.
+Zero impacto nos 7 agentes, no MIP, no Agente 8 em si.
 ```
 
 ---
 
-#### Parte 9 — O Futuro do Framework, Visualizado
+#### PARTE 9 — O Futuro do Framework, Visualizado
 
 ```
 HOJE (MVP — Estágio 2)
+─────────────────────────────────────────────────
 novex-memory.db (SQLite)
-  ├── briefing_threads    (Hot Store)
-  ├── score_calibrations  (Hot Store)
-  ├── memory_patterns     (Hot Store)
-  ├── chunks_fts   FTS5   (Warm Store — keyword)
-  ├── chunks_vec   BLOB   (Warm Store — vetores)
-  └── embedding_cache     (Warm Store — cache)
+  ├── briefing_threads        ← Hot Store (LangGraph state)
+  ├── score_calibrations      ← Hot Store
+  ├── memory_patterns         ← Hot Store
+  ├── chunks_vec              ← Warm Store (vetores)
+  ├── chunks_fts (FTS5)       ← Warm Store (keyword)
+  └── embedding_cache         ← Warm Store (cache)
 
 Embedding: nomic-embed-text (local, via Ollama)
 Busca: O(n) — ok para primeiros ~2.000 vetores
 
 EM 3 ANOS (Estágio 3-4, ~200 briefings acumulados)
-Hot Store:  ainda SQLite
+─────────────────────────────────────────────────
+Hot Store: ainda SQLite (calibrações, threads, padrões)
 Warm Store: migra para LanceDB
-Embedding:  nomic-embed-text OU text-embedding-3-small (mesma interface)
+  → lance://novex-memory/briefing_patterns
+  → lance://novex-memory/segment_insights
+  Busca IVF-PQ: O(log n), suporta 100M vetores
 
-O QUE NÃO MUDA EM NENHUM CENÁRIO:
-• Os 7 agentes
-• O Agente 8 (MemorySearchEngine)
-• O MIP
-• O Committee Flush (WAL mode no SQLite)
-• Os 4 Momentos
-• A Cold Store (Markdown + Git)
+Embedding: nomic-embed-text OU text-embedding-3-small
+(mesma interface, troca transparente)
+
+O QUE NÃO MUDA EM NENHUM CENÁRIO
+─────────────────────────────────────────────────
+• Os 7 agentes: nunca sabem qual store está em uso
+• O Agente 8: interface idêntica (MemorySearchEngine)
+• O MIP: novos agentes plugam na mesma interface
+• O Committee Flush: WAL mode no SQLite Hot Store
+• Os 4 Momentos: pré-execução, pós-briefing,
+  pós-comitê, manutenção — independentes do store
+• A Cold Store: Markdown + Git — não tem vector store
 ```
+
+---
+
+### Síntese Final
+
+| Pergunta | Resposta |
+|---|---|
+| Vou ficar travado no banco de vetores? | Não. Vetores são floats portáveis. |
+| Onde está o lock-in real? | No modelo de embedding. |
+| Como eliminar esse lock-in? | Abstração + modelo local (nomic). |
+| SQLite aguenta o crescimento? | Sim, para este volume, indefinidamente. |
+| Qual o upgrade natural do SQLite? | LanceDB — validado pelo próprio OpenClaw. |
+| Pinecone/Milvus fazem sentido? | Não para este projeto. Pinecone = dados fora da empresa. |
+| O que protege os outros 7 agentes? | A interface EmbeddingProvider + VectorStore. |
+
+A Memória Viva bem projetada não tem vendor lock-in — tem **model lock-in gerenciado** (nomic local elimina) e **store portável** (floats viajam). O risco real é arquitetural: se os agentes chamarem `chromadb.query()` diretamente em vez de chamarem `memory.search()`, qualquer troca futura vira uma refatoração global. A abstração é o investimento que protege os próximos anos.
+
+Quer que eu atualize o `ARQUITETURA.md` com a pilha de abstração e o `ADR-001` com a decisão SQLite → LanceDB antes de seguirmos para o desenvolvimento?
+
+---
+
+## PARTE 7 — Salvando a Sessão
+
+---
+
+### 👤 Jay
+
+Claude, salva todo o conteúdo do nosso chat num markdown na raiz do projeto local. Pode escolher um nome significativo para ele. Nesse meio tempo eu ainda estou ponderando por qual caminho ir. Quero o conteúdo completo dessa sessão (íntegro).
+
+---
+
+### 🤖 Claude
+
+Criou: `SESSAO-PLANEJAMENTO-MEMORIA-VIVA-2026-03-22.md`
+Commit: `104e213 — Salvar transcrição completa da sessão de planejamento da Memória Viva`
+
+---
+
+### 👤 Jay
+
+O conteúdo diverge do terminal. Por exemplo: Síntese Final não aparece no SESSAO-PLANEJAMENTO-MEMORIA-VIVA-2026-03-22.md
+
+---
+
+### 🤖 Claude
+
+Identificou as divergências: Partes 2, 3, 5 e 7 condensadas; Síntese Final completamente ausente. Corrigiu o arquivo com o conteúdo íntegro do terminal.
 
 ---
 
