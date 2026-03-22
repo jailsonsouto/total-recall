@@ -1,0 +1,23 @@
+# Banco de dados (cada instalação cria o seu)
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# Ambiente virtual Python
+.venv/
+
+# Cache Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Configuração local (contém chaves de API)
+.env
+
+# Logs de briefings (são específicos de cada instalação)
+cold_store/briefings/*.md
+cold_store/segments/*.md
+cold_store/archive/*
+
+# Não ignorar os .gitkeep
+!.gitkeep

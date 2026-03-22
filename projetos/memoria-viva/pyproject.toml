@@ -1,0 +1,26 @@
+[project]
+name = "memoria-viva"
+version = "0.1.0"
+description = "Agente 8 — Memory Manager para o sistema multi-agente Novex/Embelleze"
+requires-python = ">=3.11"
+dependencies = [
+    "sqlite-vec>=0.1.6",
+    "ollama>=0.4.0",
+    "click>=8.1.0",
+]
+
+[project.optional-dependencies]
+# Instale com: pip install -e ".[openai]"
+openai = ["openai>=1.0.0"]
+
+[project.scripts]
+# Após instalar (pip install -e .), o comando "memoria-viva"
+# fica disponível no terminal
+memoria-viva = "memoria_viva.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.setuptools.packages.find]
+where = ["src"]
