@@ -1,7 +1,7 @@
-# Projeto Novex
+# Memória Viva
 
 ## Contexto
-Agente com memória — ver transcrição completa em `/TRANSCRICAO-COMPLETA-CHAT-novex-agentes-memoria.md`
+Agente(s) com memória persistente — ver transcrição completa em `/TRANSCRICAO-COMPLETA-CHAT-novex-agentes-memoria.md`
 
 ## Status
 - [ ] Definir arquitetura do agente

@@ -10,7 +10,7 @@ Arquivos sincronizados via OneDrive (disponível no Mac e Windows).
 - `notas/` — decisões de arquitetura, aprendizados, contexto geral
 
 ## Projetos ativos
-- `projetos/novex/` — agente Novex (ver transcrição em raiz)
+- `projetos/memoria-viva/` — agente de memória viva (ver transcrição em raiz)
 
 ## Contexto de trabalho
 - Desenvolvimento no MacBook M1 (casa) e Windows 11 (trabalho, OneDrive)
