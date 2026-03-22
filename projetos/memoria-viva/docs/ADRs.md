@@ -102,3 +102,43 @@ Jay (WhatsApp / Telegram / Slack)
 ```
 
 **Trade-off aceito:** dois sistemas para manter em vez de um. Justificado pela diferença de capacidade analítica.
+
+---
+
+### ADR-006: Polling do Basecamp como trigger do Committee Flush (não webhook)
+
+**Decisão:** O Committee Flush é disparado por um cron que faz polling da API do Basecamp a cada 15 minutos — não por webhook push.
+
+**Convenção no Basecamp:**
+- To-do list dedicada: `Decisões de Comitê`
+- Cada briefing = um to-do (criado automaticamente pelo Agente 8 no pós-execução)
+- GO → to-do marcado como concluído pelo Comitê
+- NO-GO → to-do arquivado com tag `no-go` + motivos no corpo
+
+**Fluxo:**
+```
+cron (15min)
+    │
+    ▼
+Basecamp API — busca to-dos concluídos/arquivados desde último check
+    │
+    ├── nenhum novo → dorme
+    │
+    └── decisão nova encontrada
+            │
+            ▼
+        Committee Flush (transação atômica SQLite)
+            ├── Hot Store: registra decisão + razões
+            ├── Warm Store: embeda padrão (GO weight 2.0 / NO-GO com rejection_alert)
+            └── Cold Store: atualiza MEMORY.md (idempotente)
+```
+
+**Motivos:**
+- Committee Flush não é time-sensitive — 15min de latência: zero impacto
+- Zero URL pública necessária — roda 100% local, sem túnel, sem servidor exposto
+- Polling é resiliente: se o cron falha uma vez, o próximo ciclo pega a decisão perdida
+- Basecamp já é o sistema de registro do Comitê — sem duplicar ferramentas
+
+**Descartado:** webhook push (exigiria URL pública acessível pelo Basecamp — ngrok ou servidor, complexidade desnecessária para este volume e latência aceitável).
+
+**Trade-off aceito:** latência de até 15 minutos entre decisão do Comitê e flush na memória (irrelevante — o próximo briefing não começa em 15 minutos).
