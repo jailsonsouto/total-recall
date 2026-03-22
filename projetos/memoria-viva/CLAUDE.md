@@ -6,7 +6,8 @@ Transforma o sistema de "ferramenta que responde" em "sistema que aprende".
 
 ## Contexto de origem
 Planejado integralmente na sessão Claude + Jay de Março/2026.
-Transcrição completa: `/TRANSCRICAO-COMPLETA-CHAT-novex-agentes-memoria.md`
+Transcrição completa: `notas/TRANSCRICAO-COMPLETA-CHAT-novex-agentes-memoria.md`
+Sessão de planejamento: `notas/SESSAO-PLANEJAMENTO-MEMORIA-VIVA-2026-03-22.md`
 
 ## Inspirações técnicas
 - **OpenClaw** — padrões de workspace files, pre-compaction flush, session pruning
