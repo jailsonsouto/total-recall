@@ -19,7 +19,7 @@ Um PM submete uma ideia — *"sérum de transição capilar com ativo de quinoa"
 | 1 | Alinhamento de Marca | Avalia a ideia contra o Código Genético da marca (IAM) |
 | 2 | BVS Preditivo | Prevê o Branding Value Score antes do lançamento |
 | 3 | Análise Competitiva | Posicionamento em relação ao mercado |
-| 4 | Inteligência de Consumidor | ABSA em reviews e comentários reais (HNR) |
+| **4** | **Inteligência de Consumidor** | **ABSA/ASTE em comentários TikTok reais + netnografia HNR. Ver abaixo.** |
 | 5 | Priorização | RICE score por Onda de Valor |
 | 6 | Briefing Writer | Gera o documento final |
 | 7 | Coerência | Audita consistência interna do briefing (ICB) |
@@ -28,6 +28,16 @@ Um PM submete uma ideia — *"sérum de transição capilar com ativo de quinoa"
 ---
 
 ## Projetos neste repositório
+
+### [`projetos/agente-4/`](projetos/agente-4/)
+
+O Agente 4. A camada de escuta — extrai inteligência da voz real da consumidora antes de qualquer briefing ser escrito.
+
+Motor analítico baseado em BERTimbau fine-tuned para PT-BR informal, com extração de triplas ASTE `(aspecto, opinião, polaridade)` de 4.802+ comentários reais do TikTok. Segmenta por comunidade HNR (cacheadas, enroladas, henêgatas) e entrega indicadores acionáveis: PN (Prioridade Negativa), AP (Alavancagem Positiva), Controvérsia e Crescimento.
+
+O motor analítico é desenvolvido no contexto do TCC MBA DSA USP/ESALQ — *"Da Netnografia ao ABSA/ASTE: escuta 360° da consumidora no TikTok em marcas de cosméticos"*. O TCC é a Fase 1 do Agente 4.
+
+**Planejamento completo. Fase 1 (motor ASTE/TCC) em andamento.**
 
 ### [`projetos/memoria-viva/`](projetos/memoria-viva/)
 
@@ -42,6 +52,7 @@ O Agente 8. A camada de inteligência que transforma um sistema sofisticado-mas-
 ```
 agentes/
 ├── projetos/
+│   ├── agente-4/        ← Agente 4 (Consumer Intelligence) — planejamento completo
 │   └── memoria-viva/    ← Agente 8 (Memory Manager) — MVP pronto
 ├── notas/               ← Sessões de planejamento e decisões de arquitetura
 └── templates/           ← Templates reutilizáveis (roadmap)
