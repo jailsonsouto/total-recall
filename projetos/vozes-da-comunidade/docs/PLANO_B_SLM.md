@@ -62,20 +62,34 @@ pip install ollama
 ```python
 import ollama
 
+from pydantic import BaseModel
+from typing import Literal
+
+class TripletSchema(BaseModel):
+    aspecto: str
+    opiniao: str
+    polaridade: Literal["POS", "NEG", "NEU", "MIX"]
+    confianca: float
+    categoria_aspecto: str
+
+class ASTESchema(BaseModel):
+    triplas: list[TripletSchema]
+
 response = ollama.chat(
     model="qwen2.5:7b",
     messages=[
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user",   "content": USER_PROMPT},
     ],
-    format="json",          # garante JSON válido na saída — recurso nativo ollama
-    options={"temperature": 0.1},  # baixa temperatura = mais determinístico
+    format=ASTESchema.model_json_schema(),  # constrained decoding por schema
+    options={"temperature": 0},             # temperatura 0 = determinístico
 )
 
-triplas = response["message"]["content"]  # string JSON
+result = ASTESchema.model_validate_json(response["message"]["content"])
+# result.triplas[0].polaridade será sempre "POS"|"NEG"|"NEU"|"MIX"
 ```
 
-**`format="json"`** ativa o modo JSON constrained decoding do ollama. O modelo só pode gerar tokens que resultem em JSON válido — elimina a necessidade de retry na maioria dos casos. Referência: https://github.com/ollama/ollama/blob/main/docs/api.md#request-json-mode
+**`format=schema_dict`** (não apenas `format="json"`) ativa constrained decoding por schema no ollama. Garante não só JSON válido, mas também tipos corretos e enums válidos — `polaridade` nunca sairá como `"POSITIVE"` ou `"negativo"`. Mais robusto que `format="json"` puro. Referência: https://github.com/ollama/ollama/blob/main/docs/api.md#request-json-mode
 
 ---
 
@@ -262,13 +276,18 @@ python -m mlx_lm.convert \
   -q   # quantiza para 4-bit → ~4.28 GB
 
 # Fine-tuning com LoRA
+# --mask-prompt: CRÍTICO — calcula loss só nas completions (assistant), não nos prompts
+# --grad-checkpoint: gradient checkpointing — troca compute por memória (essencial no M1 16GB)
+# --num-layers 8: fine-tuna 8 das 28 camadas (~4x menos parâmetros treináveis)
 mlx_lm.lora \
   --model ./models/qwen2.5-7b-base \
   --train \
   --data ./data/aste_lora/ \
   --iters 600 \
   --batch-size 1 \
-  --num-layers 4 \
+  --num-layers 8 \
+  --grad-checkpoint \
+  --mask-prompt \
   --adapter-path ./models/qwen-aste-adapters/
 
 # Merge dos adapters no modelo base
@@ -285,7 +304,9 @@ mlx_lm.fuse \
 | Parâmetro | Valor | Motivo |
 |---|---|---|
 | `--batch-size` | 1 | memória limitada em 16GB |
-| `--num-layers` | 4 | reduz footprint de memória durante treino |
+| `--num-layers` | 8 | fine-tuna 8/28 camadas — balance qualidade/memória |
+| `--grad-checkpoint` | ativado | gradient checkpointing: troca compute por memória |
+| `--mask-prompt` | ativado | **CRÍTICO**: loss só nas completions, não nos prompts |
 | `--iters` | 600 | suficiente para 500 exemplos (~1 época completa) |
 | `--learning-rate` | 1e-5 | padrão LoRA para instruction-tuning |
 

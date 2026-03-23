@@ -105,7 +105,7 @@ class BERTimbauExtractor(ASTEExtractor):
             )
 
     def _load_pipeline(self, model_path: str) -> None:
-        """Injeta DINAMICA-ABSA no sys.path e carrega o pipeline."""
+        """Injeta DINAMICA-ABSA no sys.path e carrega o pipeline com checkpoints."""
         import os
 
         absa_path = os.getenv(
@@ -123,9 +123,17 @@ class BERTimbauExtractor(ASTEExtractor):
 
         from dinamica_absa.src.models.full_pipeline import DINAMICA_ABSAPipeline  # type: ignore
 
-        self._pipeline = DINAMICA_ABSAPipeline.from_pretrained(model_path)
-        self._pipeline.eval()
-        logger.info("BERTimbauExtractor: modelo carregado de '%s'.", model_path)
+        # DINAMICA_ABSAPipeline carrega o encoder base e aplica os checkpoints
+        # fine-tuned via load_checkpoints(checkpoint_dir).
+        # Arquivos esperados no model_path:
+        #   aspect_extractor.pt, opinion_extractor.pt,
+        #   polarity_classifier.pt, pair_matcher.pt
+        self._pipeline = DINAMICA_ABSAPipeline(
+            model_name="neuralmind/bert-base-portuguese-cased",
+            checkpoint_dir=model_path,
+        )
+        self._pipeline.set_eval_mode()
+        logger.info("BERTimbauExtractor: checkpoints carregados de '%s'.", model_path)
 
     # ------------------------------------------------------------------
     # Interface ASTEExtractor
@@ -140,7 +148,8 @@ class BERTimbauExtractor(ASTEExtractor):
                 "BERTimbauExtractor não está pronto. "
                 "Fine-tuning necessário ou BERTIMBAU_MODEL_PATH inválido."
             )
-        result = self._pipeline.extract(text)
+        # Método correto do DINAMICA_ABSAPipeline: process_text()
+        result = self._pipeline.process_text(text)
         return [self._adapt(t, context) for t in result.triplets]
 
     def batch_extract(self, comments: list[dict]) -> list[list[ASTETriplet]]:
@@ -151,7 +160,9 @@ class BERTimbauExtractor(ASTEExtractor):
         texts = [c.get("text_for_model", "") for c in comments]
         contexts = [ctx_from_comment(c) for c in comments]
 
-        results = self._pipeline.batch_extract(texts)
+        # process_json_file() processa arquivos; para lista de textos usa process_text() em loop
+        # O pipeline DINAMICA-ABSA não expõe batch_extract() direto — serial é o caminho correto
+        results = [self._pipeline.process_text(t) for t in texts]
 
         return [
             [self._adapt(t, ctx) for t in r.triplets]

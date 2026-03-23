@@ -20,11 +20,31 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel
 
 from vozes_da_comunidade.types import ASTETriplet, ExtractionContext
-from . import config as cfg
+from vozes_da_comunidade import config as cfg
 from .base import ASTEExtractor
+
+
+# ---------------------------------------------------------------------------
+# Schema Pydantic para saída estruturada do ollama
+# Passado como format=_ASTESchema.model_json_schema() — constrained decoding
+# garante JSON válido E tipos corretos, sem depender apenas do prompt.
+# ---------------------------------------------------------------------------
+
+class _TripletSchema(BaseModel):
+    aspecto: str
+    opiniao: str
+    polaridade: Literal["POS", "NEG", "NEU", "MIX"]
+    confianca: float
+    categoria_aspecto: str
+
+
+class _ASTESchema(BaseModel):
+    triplas: list[_TripletSchema]
 
 logger = logging.getLogger(__name__)
 
@@ -149,14 +169,22 @@ class SLMExtractor(ASTEExtractor):
     # ------------------------------------------------------------------
 
     def _call_with_retry(self, prompt: str) -> dict[str, Any]:
-        """Chama o backend com retry em caso de JSON inválido."""
+        """
+        Chama o backend com retry em caso de falha de parsing.
+
+        Para ollama: constrained decoding via schema Pydantic garante JSON válido
+        na quase totalidade dos casos — retry é segurança extra para edge cases.
+        Para MLX: parsing manual do texto gerado, mais suscetível a falhas.
+        """
         for attempt in range(1, cfg.SLM_MAX_RETRIES + 1):
             try:
                 raw = self._call_backend(prompt)
+                if isinstance(raw, dict):
+                    return raw  # ollama já retorna dict parseado via Pydantic
                 return json.loads(raw)
-            except (json.JSONDecodeError, KeyError) as exc:
+            except (json.JSONDecodeError, KeyError, ValueError) as exc:
                 logger.warning(
-                    "SLMExtractor: JSON inválido (tentativa %d/%d): %s",
+                    "SLMExtractor: falha no parsing (tentativa %d/%d): %s",
                     attempt,
                     cfg.SLM_MAX_RETRIES,
                     exc,
@@ -172,9 +200,14 @@ class SLMExtractor(ASTEExtractor):
             return self._call_mlx(prompt)
         return self._call_ollama(prompt)
 
-    def _call_ollama(self, prompt: str) -> str:
+    def _call_ollama(self, prompt: str) -> dict[str, Any]:
         """
-        Chama o modelo via ollama com format='json' (garante JSON válido).
+        Chama o modelo via ollama com constrained decoding por schema Pydantic.
+
+        format=_ASTESchema.model_json_schema() é mais robusto que format='json':
+        - Garante não só JSON válido, mas tipos corretos e campos obrigatórios
+        - Polaridade é Literal["POS","NEG","NEU","MIX"] — sem valores inválidos
+        - Sem necessidade de post-processing manual de enums
 
         Referência: https://github.com/ollama/ollama/blob/main/docs/api.md
         """
@@ -191,10 +224,12 @@ class SLMExtractor(ASTEExtractor):
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
-            format="json",  # força saída JSON válida
-            options={"temperature": 0.1},  # baixa temperatura = mais determinístico
+            format=_ASTESchema.model_json_schema(),  # constrained decoding por schema
+            options={"temperature": 0},              # temperatura 0 = determinístico
         )
-        return response["message"]["content"]
+        # Valida e retorna como dict — Pydantic garante tipos corretos
+        validated = _ASTESchema.model_validate_json(response["message"]["content"])
+        return validated.model_dump()
 
     def _call_mlx(self, prompt: str) -> str:
         """

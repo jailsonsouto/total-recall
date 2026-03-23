@@ -23,15 +23,17 @@ Referências canônicas:
 | Propriedade | Valor |
 |---|---|
 | ID HuggingFace | `neuralmind/bert-base-portuguese-cased` |
-| Alternativa uncased | `neuralmind/bert-base-portuguese-uncased` |
+| Alternativa large | `neuralmind/bert-large-portuguese-cased` (335M, 24L — mais lento) |
 | Arquitetura | BERT-base (12 camadas, 768 dim, 12 heads) |
 | Tokenizador | `BertTokenizerFast` (WordPiece, vocab PT-BR) |
 | Parâmetros | 110M |
 | Treinamento | BrWaC + Wikipedia PT-BR (2,7B palavras) |
 | Hardware | M1 MPS ou CUDA — sem diferença de código |
 
-**Por que cased (não uncased):**
-Comentários de TikTok têm capitalização significativa: `AMEI`, `HORRÍVEL`, `kkkk`. O modelo cased preserva essa informação. Para PT-BR informal, cased é a escolha correta.
+**Por que cased:**
+Comentários de TikTok têm capitalização significativa: `AMEI`, `HORRÍVEL`, `kkkk`. O modelo cased preserva essa informação. Não existe versão uncased do BERTimbau — apenas cased (base e large).
+
+> **Atenção:** não existe `neuralmind/bert-base-portuguese-uncased`. Qualquer referência a uncased em código antigo está errada.
 
 ---
 
@@ -151,6 +153,28 @@ Referência: https://huggingface.co/docs/transformers/tasks/token_classification
 
 ---
 
+## Gotchas críticos (não pular)
+
+1. **`do_lower_case=False` é obrigatório.**
+   ```python
+   tokenizer = AutoTokenizer.from_pretrained(
+       "neuralmind/bert-base-portuguese-cased",
+       do_lower_case=False,   # NUNCA omitir — corrompe ã, é, ç silenciosamente
+   )
+   ```
+
+2. **`is_split_into_words=True` é obrigatório** quando o input já é lista de tokens. Sem isso, `word_ids()` não consegue mapear sub-tokens → palavras e o alinhamento de labels quebra.
+
+3. **Usar `-100`, não `0`, para posições ignoradas.** `0` é o ID do label `"O"` — usar `0` em `[CLS]`/`[SEP]` faz o modelo treinar sobre eles incorretamente.
+
+4. **BIO constraint violations em inferência.** O modelo pode gerar `I-X` sem `B-X` precedente. Adicione pós-processamento com máquina de estados simples antes de extrair spans.
+
+5. **`processing_class=tokenizer`** é a API v5.x do Trainer (substitui o deprecado `tokenizer=tokenizer`).
+
+6. **seqeval calcula F1 no nível de span**, não de token. É a métrica correta para ASTE — accuracy por token é enganosa (maioria dos tokens é "O").
+
+---
+
 ## Script de fine-tuning completo
 
 ```python
@@ -255,7 +279,7 @@ def main(args):
         args=training_args,
         train_dataset=tokenized["train"],
         eval_dataset=tokenized["validation"],
-        tokenizer=tokenizer,
+        processing_class=tokenizer,   # API v5.x — substitui tokenizer= (deprecado)
         data_collator=DataCollatorForTokenClassification(tokenizer),
         compute_metrics=compute_metrics,
     )
