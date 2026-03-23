@@ -133,6 +133,59 @@ O parâmetro `tokenizer=tokenizer` no Trainer foi deprecado. A API v5.x usa `pro
 
 ---
 
+---
+
+## Sessão — Março/2026: implementação do pipeline batch e indicadores
+
+### 8. Estrutura do pacote — `src/` mapeado como `vozes_da_comunidade`
+
+**Descoberto em:** revisão do pyproject.toml após criar a CLI
+
+O diretório `src/` é plano (sem subdiretório `vozes_da_comunidade/`). O mapeamento correto no `pyproject.toml`:
+
+```toml
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vozes_da_comunidade*"]
+
+[tool.setuptools.package-dir]
+"vozes_da_comunidade" = "src"
+```
+
+Isso permite que `from vozes_da_comunidade.batch import BatchPipeline` funcione sem mover os arquivos.
+
+**Por que importa:** `[tool.setuptools.package-dir] "" = "src"` (padrão comum) não funciona quando o nome do pacote é diferente do diretório.
+
+**Onde está:** `pyproject.toml`
+
+---
+
+### 9. `_raw_chunk_text` não pode ser campo de `ConsumerIntelligenceOutput`
+
+**Descoberto em:** implementação do `formatter.py`
+
+Tentativa inicial: adicionar `_raw_chunk_text` como campo extra ao construtor de `ConsumerIntelligenceOutput` para carregar o texto do Warm Store. Falha: o dataclass não tem esse campo.
+
+Solução limpa: `_search_warm_store()` retorna `list[str]` (chunk texts) diretamente — não tenta reconstruir o dataclass. `_collect_pattern_texts()` retorna `list[str]` em ambos os caminhos (Warm Store ou outputs diretos serializados via `_output_to_text()`). A função `_synthesize_with_haiku()` só precisa de texto.
+
+**Por que importa:** forçar retornos heterogêneos em uma mesma função (`list[ConsumerIntelligenceOutput | str]`) cria bugs silenciosos na serialização para o prompt.
+
+**Onde está:** `src/synthesis/formatter.py` — funções `_collect_pattern_texts()` e `_search_warm_store()`
+
+---
+
+### 10. Flush para o Warm Store usa `vector_store.add()` — não `memory_manager.post_briefing_flush()`
+
+**Descoberto em:** leitura da API da Memória Viva
+
+`MemoryManager.post_briefing_flush()` é para briefings de produto (Hot Store + Warm Store + Cold Store). Para dados do corpus TikTok, o correto é usar `SQLiteVectorStore.add()` diretamente com `collection="vozes_comunidade"`.
+
+**Por que importa:** `post_briefing_flush()` espera campos de briefing (thread_id, iam_score, etc.) que não existem no contexto do Vozes da Comunidade.
+
+**Onde está:** `src/memory/flush.py` — função `_flush_to_warm_store()`
+
+---
+
 ## Convenções deste projeto
 
 - **Motor de extração:** `ASTE_BACKEND=slm` no `.env` por padrão (funciona imediatamente). Mudar para `bertimbau` quando o checkpoint fine-tuned estiver disponível.

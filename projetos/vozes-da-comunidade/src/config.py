@@ -90,3 +90,28 @@ BRIEFING_RELEVANCE_THRESHOLD: float = float(
 """
 Score mínimo de relevância para incluir um padrão no briefing.
 """
+
+# ---------------------------------------------------------------------------
+# Integração com Memória Viva (Agente 8)
+# ---------------------------------------------------------------------------
+
+MEMORIA_VIVA_PATH: str | None = os.getenv(
+    "MEMORIA_VIVA_PATH",
+    str(Path.home() / "Library/CloudStorage/OneDrive-Embelleze"
+        "/MEUS-PROJETOS-IA/AGENTES/CLAUDE/projetos/memoria-viva/src"),
+)
+"""
+Caminho para src/ da Memória Viva — adicionado ao sys.path para importar
+memoria_viva.vector_store e gravar no Warm Store (Agente 8).
+Defina como vazio ("") para desativar e usar fallback JSON local.
+"""
+
+ANTHROPIC_API_KEY: str | None = os.getenv("ANTHROPIC_API_KEY")
+"""
+Chave da API Anthropic — necessária para a síntese via Claude Haiku.
+"""
+
+SYNTHESIS_MODEL: str = os.getenv("SYNTHESIS_MODEL", "claude-haiku-4-5-20251001")
+"""
+Modelo Claude usado na síntese da seção INTELIGÊNCIA DE CONSUMIDOR.
+"""
