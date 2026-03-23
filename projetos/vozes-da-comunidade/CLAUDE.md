@@ -4,10 +4,11 @@
 Vozes da Comunidade do sistema multi-agente de briefing de produto Novex/Embelleze.
 Extrai inteligência da voz real da consumidora (TikTok) usando ABSA/ASTE e netnografia.
 
-## Relação com o TCC
-Este projeto DEPENDE do TCC do MBA DSA USP/ESALQ (Jailson de Castro de Souto).
-O TCC produz o motor analítico — o Vozes da Comunidade o aplica operacionalmente.
-Código do motor: `/Users/criacao/Library/CloudStorage/OneDrive-Embelleze/MEUS-PROJETOS-IA/COLETA-COMENTARIOS-TIKTOK/PROCESSAMENTO-COLETA/kimi/`
+## Ativos cedidos pelo TCC
+O TCC MBA DSA USP/ESALQ (Jailson de Castro de Souto) é um projeto independente que cedeu ativos para este projeto. São atividades distintas.
+
+Ativos recebidos — localização:
+`/Users/criacao/Library/CloudStorage/OneDrive-Embelleze/MEUS-PROJETOS-IA/COLETA-COMENTARIOS-TIKTOK/PROCESSAMENTO-COLETA/kimi/`
 
 Ao trabalhar neste projeto, **não duplicar** lógica do `dinamica_absa` — importar como dependência.
 

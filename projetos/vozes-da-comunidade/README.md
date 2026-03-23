@@ -17,24 +17,17 @@ Antes de um briefing ser finalizado, o Vozes da Comunidade consulta o corpus de 
 
 ---
 
-## A convergência TCC → Vozes da Comunidade
+## Ativos cedidos pelo TCC
 
-Este projeto não começa do zero. Ele é a aplicação operacional de um trabalho acadêmico em andamento:
+Este projeto parte de um conjunto de ativos desenvolvidos de forma independente no contexto do TCC *"Da Netnografia ao ABSA/ASTE: escuta 360° da consumidora no TikTok em marcas de cosméticos"* (MBA DSA, USP/ESALQ). São projetos distintos — o TCC tem objetivos acadêmicos próprios; o Vozes da Comunidade tem objetivos operacionais. O que foi cedido:
 
-**TCC** — *"Da Netnografia ao ABSA/ASTE: escuta 360° da consumidora no TikTok em marcas de cosméticos"*
-MBA em Data Science & Analytics, USP/ESALQ — Jailson de Castro de Souto
-
-O TCC constrói o motor analítico: coleta, anotação, fine-tuning do BERTimbau, framework ASTE. O Vozes da Comunidade usa esse motor para gerar inteligência de produto em tempo real. **O TCC não é um projeto paralelo — é a Fase 1 do Vozes da Comunidade.**
-
-```
-TCC (Fase 1)                    Vozes da Comunidade (Fase 2)
-─────────────────────────────── ──────────────────────────────
-Coleta TikTok (4.802+ comments) Usa o corpus coletado
-Codebook V3 de anotação         Define taxonomia de aspectos
-500 anotações humanas           Dataset de fine-tuning
-BERTimbau fine-tuned            Motor de extração ASTE
-Indicadores PN/AP               Métricas para o briefing
-```
+| Ativo | Descrição |
+|---|---|
+| Corpus TikTok | 4.802 comentários reais (JSON, schema V1 normalizado) |
+| TikTokTextProcessor | Pré-processamento: gírias PT-BR, emojis, ironia |
+| Framework DINAMICA-ABSA | Arquitetura BERTimbau (4 camadas) — estruturada, aguarda fine-tuning |
+| Codebook V3 | Taxonomia de aspectos + regras de anotação ASTE |
+| Indicadores | PN, AP, Controvérsia, Crescimento — definidos e validados |
 
 ---
 
@@ -74,12 +67,12 @@ Score de oportunidade neste segmento: 7.8/10
 
 | Componente | Tecnologia | Origem |
 |---|---|---|
-| Corpus base | 4.802 comentários TikTok (JSON) | Coleta TCC |
-| Motor ASTE | BERTimbau fine-tuned (neuralmind/bert-base-portuguese-cased) | TCC Fase 1 |
-| Pré-processamento | TikTokTextProcessor (gírias PT-BR + emojis + ironia) | `dinamica_absa` |
-| Topic modeling | BERTopic | TCC |
-| Segmentação HNR | native_terms + cultural_markers do schema V1 | Codebook V3 |
-| Indicadores | PN, AP, Controvérsia, Crescimento | TCC |
+| Corpus base | 4.802 comentários TikTok (JSON) | Cedido pelo TCC |
+| Motor ASTE | BERTimbau fine-tuned (neuralmind/bert-base-portuguese-cased) | Cedido pelo TCC |
+| Pré-processamento | TikTokTextProcessor (gírias PT-BR + emojis + ironia) | Cedido pelo TCC |
+| Topic modeling | BERTopic | Cedido pelo TCC |
+| Segmentação HNR | native_terms + cultural_markers do schema V1 | Cedido pelo TCC |
+| Indicadores | PN, AP, Controvérsia, Crescimento | Cedido pelo TCC |
 | Persistência | Memória Viva (Agente 8) — SQLite + sqlite-vec | Agente 8 |
 | Orquestração | LangGraph | Sistema multi-agente |
 
@@ -92,29 +85,32 @@ Score de oportunidade neste segmento: 7.8/10
 | [docs/PRD.md](docs/PRD.md) | Problema, objetivos e métricas de sucesso |
 | [docs/ARQUITETURA.md](docs/ARQUITETURA.md) | Pipeline completo, schema JSON, integração |
 | [docs/ADRs.md](docs/ADRs.md) | 5 decisões de arquitetura com motivos e trade-offs |
-| [ROADMAP.md](ROADMAP.md) | Fases alinhadas com o TCC |
+| [ROADMAP.md](ROADMAP.md) | Estágios de implementação |
 
 ---
 
 ## Estágio atual
 
 ```
-Fase 1 — Motor ASTE (TCC)      [em andamento]
-  ✓ Corpus coletado: 4.802 comentários TikTok
-  ✓ Schema JSON V1 normalizado
-  ✓ Codebook V3 para anotação humana
-  ✓ Framework DINAMICA-ABSA estruturado (BERTimbau)
+Ativos recebidos do TCC (ponto de partida)
+  ✓ Corpus: 4.802 comentários TikTok (JSON, schema V1)
   ✓ TikTokTextProcessor (pré-processamento)
-  ✗ 500 anotações ASTE completas (pendente)
-  ✗ BERTimbau fine-tuned (depende das anotações)
+  ✓ Framework DINAMICA-ABSA estruturado (BERTimbau, 4 camadas)
+  ✓ Codebook V3 de anotação
+  ✓ Indicadores PN/AP/Controvérsia/Crescimento definidos
 
-Fase 2 — Vozes da Comunidade operacional  [roadmap: após Fase 1]
+Estágio 1 — MVP operacional    [próximo]
   ✗ Encapsular dinamica_absa como motor do agente
   ✗ Router por interaction_type
-  ✗ Indicadores PN/AP para formato de briefing
+  ✗ Calculador de indicadores por (categoria, segmento)
+  ✗ Síntese com Claude Haiku (extração ASTE zero-shot)
   ✗ Integração com Memória Viva (Agente 8)
 
-Fase 3 — Integração LangGraph  [roadmap: após Agente 8 conectado]
+Estágio 2 — Upgrade de qualidade    [paralelo ao TCC]
+  ✗ BERTimbau fine-tuned (plug-in quando o TCC entregar)
+  ✗ Re-processar corpus com modelo de maior precisão
+
+Estágio 3 — Integração LangGraph  [após Agente 8 conectado]
   ✗ Vozes da Comunidade como nó do grafo multi-agente
   ✗ Output injetado no contexto do Agente 6 (Briefing Writer)
 ```
@@ -122,5 +118,5 @@ Fase 3 — Integração LangGraph  [roadmap: após Agente 8 conectado]
 ---
 
 *Parte do sistema multi-agente de briefing de produto Novex/Embelleze.*
-*Motor analítico: TCC MBA DSA USP/ESALQ — Jailson de Castro de Souto.*
+*Ativos cedidos pelo TCC MBA DSA USP/ESALQ — Jailson de Castro de Souto.*
 *Integração ao sistema: Março/2026 com Claude Code.*
