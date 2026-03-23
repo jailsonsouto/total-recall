@@ -1,0 +1,23 @@
+# Plano A — BERTimbau fine-tuned
+# Instale com: pip install -r requirements-plano-a.txt
+
+# Framework de transformers (HuggingFace)
+torch>=2.1.0
+transformers>=4.40.0
+tokenizers>=0.19.0
+
+# Datasets e collators
+datasets>=2.18.0
+accelerate>=0.27.0
+
+# Métricas span-level F1 para avaliação ASTE
+# Referência: https://github.com/chakki-works/seqeval
+seqeval>=1.2.2
+
+# Suporte MPS (Apple Silicon M1)
+# torch já inclui MPS — sem dependência extra
+# Para verificar: python -c "import torch; print(torch.backends.mps.is_available())"
+
+# Dependência do DINAMICA-ABSA (TCC)
+# Instalada via DINAMICA_ABSA_PATH no .env (sys.path injection)
+# Não instalar como pacote PyPI — importar diretamente do diretório do TCC

@@ -1,0 +1,15 @@
+# Plano B — SLM local (Qwen2.5 via ollama ou MLX-LM)
+# Instale com: pip install -r requirements-plano-b.txt
+
+# Backend ollama (simples, qualquer modelo, requer servidor ollama)
+# Documentação: https://github.com/ollama/ollama
+# Instalar servidor: https://ollama.com/download
+ollama>=0.3.0
+
+# Backend MLX-LM (nativo Apple Silicon, sem servidor)
+# Referência: https://github.com/ml-explore/mlx-lm
+# Requer Apple Silicon (M1/M2/M3)
+mlx-lm>=0.18.0
+
+# Utilitários
+python-dotenv>=1.0.0
