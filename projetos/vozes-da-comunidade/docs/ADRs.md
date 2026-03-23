@@ -1,6 +1,6 @@
-# Architecture Decision Records — Agente 4
+# Architecture Decision Records — Vozes da Comunidade
 
-**Projeto:** Agente 4 — Consumer Intelligence
+**Projeto:** Vozes da Comunidade
 **Data:** Março/2026
 
 ---

@@ -1,4 +1,4 @@
-# PRD — Agente 4: Consumer Intelligence
+# PRD — Vozes da Comunidade
 
 **Versão:** 1.0
 **Data:** Março/2026

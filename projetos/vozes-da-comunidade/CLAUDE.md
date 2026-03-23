@@ -1,12 +1,12 @@
-# Agente 4 — Contexto do Projeto
+# Vozes da Comunidade — Contexto do Projeto
 
 ## O que é
-Agente 4 (Consumer Intelligence) do sistema multi-agente de briefing de produto Novex/Embelleze.
+Vozes da Comunidade do sistema multi-agente de briefing de produto Novex/Embelleze.
 Extrai inteligência da voz real da consumidora (TikTok) usando ABSA/ASTE e netnografia.
 
 ## Relação com o TCC
 Este projeto DEPENDE do TCC do MBA DSA USP/ESALQ (Jailson de Castro de Souto).
-O TCC produz o motor analítico — o Agente 4 o aplica operacionalmente.
+O TCC produz o motor analítico — o Vozes da Comunidade o aplica operacionalmente.
 Código do motor: `/Users/criacao/Library/CloudStorage/OneDrive-Embelleze/MEUS-PROJETOS-IA/COLETA-COMENTARIOS-TIKTOK/PROCESSAMENTO-COLETA/kimi/`
 
 Ao trabalhar neste projeto, **não duplicar** lógica do `dinamica_absa` — importar como dependência.
@@ -23,7 +23,7 @@ Ao trabalhar neste projeto, **não duplicar** lógica do `dinamica_absa` — imp
 - Categorias: máscaras de reconstrução, reposição de massa, cronograma capilar
 - Localização: `.../kimi/package/user_input_files/`
 
-## Indicadores que o Agente produz
+## Indicadores que o agente produz
 - PN (Prioridade Negativa): dores mais citadas por segmento
 - AP (Alavancagem Positiva): atributos que convertem
 - Controvérsia: aspectos divisórios (alerta para Comitê)

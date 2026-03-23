@@ -1,4 +1,4 @@
-# Arquitetura — Agente 4: Consumer Intelligence
+# Arquitetura — Vozes da Comunidade
 
 **Versão:** 1.0 | **Data:** Março/2026
 
