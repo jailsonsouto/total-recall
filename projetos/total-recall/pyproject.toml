@@ -1,0 +1,24 @@
+[project]
+name = "total-recall"
+version = "0.1.0"
+description = "Memória pesquisável para sessões do Claude Code — indexa todos os transcripts JSONL"
+requires-python = ">=3.9"
+dependencies = [
+    "sqlite-vec>=0.1.6",
+    "ollama>=0.4.0",
+    "click>=8.1.0",
+]
+
+[project.optional-dependencies]
+openai = ["openai>=1.0.0"]
+dev = ["pytest>=8.0.0"]
+
+[project.scripts]
+total-recall = "total_recall.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
