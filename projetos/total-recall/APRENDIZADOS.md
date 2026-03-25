@@ -56,3 +56,37 @@
    - Quando não gera (erro, indisponível), chunk só aparece na keyword (FTS5)
    - A busca híbrida combina ambas, então chunks FTS-only ainda aparecem nos resultados
    - Isso é o graceful degradation funcionando como desenhado
+
+## 2026-03-24 — Migração para qwen3-embedding:4b
+
+9. **qwen3-embedding:4b é muito superior ao nomic-embed-text para este caso**
+   - Score MTEB multilingual: 69.45 (qwen3-4b) vs ~60 (nomic)
+   - Cross-lingual funciona: query em inglês encontra conteúdo em pt-BR e vice-versa
+   - Instruction-aware: queries recebem instrução, documentos não — melhora recall
+   - Teste real: "renomear pasta projetos/novex" subiu de score 0.066 → 0.528 no resultado correto
+   - **Onde**: `embeddings.py` (OllamaEmbedProvider), `config.py` (OLLAMA_EMBED_MODEL)
+
+10. **1024 dims basta para busca híbrida — 2560 é overkill**
+    - Em sistema híbrido, FTS5/BM25 cobre keywords, siglas, termos de código
+    - Vetor só precisa resolver semântica, paráfrase e cross-lingual
+    - 1024 dims × 596 chunks = ~2.4 MB em vetores. Leve.
+    - Fallback: subir para 2560 só se observar perda real de recall
+    - **Onde**: `config.py:47` (EMBEDDING_DIMENSIONS = 1024)
+
+11. **embed_query vs embed_document é obrigatório para Qwen**
+    - Qwen recomenda instrução explícita para queries de retrieval
+    - Formato: `Instruct: {instruction}\nQuery: {text}`
+    - Documentos vão crus, sem instrução
+    - Sem essa separação, a qualidade do retrieval cai
+    - **Onde**: `embeddings.py:65-72` (embed_query), `vector_store.py:49-60` (_embed_with_cache kind param)
+
+12. **Cache de embedding deve incluir modelo+dims no hash**
+    - Hash antigo: `sha256(text)` — colide se trocar modelo ou dimensão
+    - Hash novo: `sha256(model:dims:text)` — evita reutilizar embedding incompatível
+    - Full reindex limpa cache antigo automaticamente
+    - **Onde**: `embeddings.py:53-55` (text_hash), `indexer.py:58-62` (DELETE embedding_cache no full)
+
+13. **Trocar dimensão do vec0 exige DROP TABLE + CREATE**
+    - `CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(...)` não altera dimensão se tabela já existe
+    - No full reindex, é obrigatório dropar e recriar com a nova dimensão
+    - **Onde**: `database.py:164-170` (recreate_vec_table), `indexer.py:58-62`
