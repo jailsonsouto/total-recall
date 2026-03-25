@@ -66,6 +66,19 @@ TEXT_WEIGHT = 0.3
 CONTEXT_BUDGET = 6000
 
 # ══════════════════════════════════════════════════════════════
+# FUZZY MATCHING (V02)
+# ══════════════════════════════════════════════════════════════
+
+# Similaridade mínima para expansão fuzzy (0.0–1.0)
+FUZZY_THRESHOLD = float(os.getenv("TOTAL_RECALL_FUZZY_THRESHOLD", "0.85"))
+
+# Máximo de variantes por token
+FUZZY_MAX_EXPANSIONS = int(os.getenv("TOTAL_RECALL_FUZZY_MAX_EXPANSIONS", "3"))
+
+# Tokens menores que isso não passam por fuzzy (evita falsos positivos)
+FUZZY_MIN_TOKEN_LENGTH = int(os.getenv("TOTAL_RECALL_FUZZY_MIN_TOKEN_LENGTH", "4"))
+
+# ══════════════════════════════════════════════════════════════
 # TEMPORAL DECAY
 # ══════════════════════════════════════════════════════════════
 
