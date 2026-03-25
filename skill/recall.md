@@ -1,4 +1,5 @@
 ---
+name: recall
 description: |
   Search across all past Claude Code sessions for any topic, decision, or conversation.
   Use when the user wants to recall something from a previous session, recover lost context,
