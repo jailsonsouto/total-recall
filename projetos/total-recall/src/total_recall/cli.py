@@ -76,13 +76,18 @@ def init():
     else:
         click.echo(f"  Sessões: diretório não encontrado ({SESSIONS_ROOT})")
 
-    # 5. Instala skill
+    # 5. Instala skill (novo formato: ~/.claude/skills/recall/SKILL.md)
     skill_src = Path(__file__).parent.parent.parent / "skill" / "recall.md"
-    skill_dst = Path.home() / ".claude" / "commands" / "recall.md"
+    skill_dst = Path.home() / ".claude" / "skills" / "recall" / "SKILL.md"
     if skill_src.exists():
         skill_dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(skill_src, skill_dst)
         click.echo(f"  Skill /recall instalada: {skill_dst}")
+        # Limpa local antigo se existir
+        old_dst = Path.home() / ".claude" / "commands" / "recall.md"
+        if old_dst.exists():
+            old_dst.unlink()
+            click.echo(f"  Removido local antigo: {old_dst}")
     else:
         click.echo("  Skill /recall: arquivo fonte não encontrado (instale manualmente)")
 
