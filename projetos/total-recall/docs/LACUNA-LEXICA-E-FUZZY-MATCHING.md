@@ -624,16 +624,226 @@ de vocabulary mismatch que são relevantes para seu perfil de corpus.
 
 ## Referências e Leituras Complementares
 
+As referências estão organizadas por tema. Para cada área, a ordem sugere
+uma progressão de leitura — do fundacional ao aplicado.
+
+---
+
+### Fundamentos de Recuperação de Informação
+
+**O livro de referência da área** — disponível gratuitamente online:
+
+- **Manning, C.D., Raghavan, P., Schütze, H.** (2008). *Introduction to
+  Information Retrieval*. Cambridge University Press.
+  https://nlp.stanford.edu/IR-book/
+  *(Capítulos 1–3 para IR clássico; cap. 6 para scoring e BM25;
+  cap. 19 para web search e expansão de query)*
+
+- **Büttcher, S., Clarke, C., Cormack, G.V.** (2010). *Information Retrieval:
+  Implementing and Evaluating Search Engines*. MIT Press.
+  *(Mais prático que Manning et al.; cobre implementação de índice invertido,
+  BM25 e avaliação de sistemas)*
+
+---
+
+### BM25 e Modelos Probabilísticos de Relevância
+
+- **Robertson, S.E., Walker, S., Jones, S., Hancock-Beaulieu, M., Gatford, M.**
+  (1994). Okapi at TREC-3. *NIST Special Publication 500-225*, 109–126.
+  *(O paper onde BM25 aparece pela primeira vez com esse nome)*
+
+- **Robertson, S., Zaragoza, H.** (2009). The probabilistic relevance
+  framework: BM25 and beyond. *Foundations and Trends in Information
+  Retrieval*, 3(4), 333–389.
+  *(A referência definitiva de BM25; cobre as variantes BM25F para campos
+  múltiplos — relevante para entender como o FTS5 aplica o ranking)*
+
+- **Sparck Jones, K., Walker, S., Robertson, S.E.** (2000). A probabilistic
+  model of information retrieval: development and comparative experiments.
+  *Information Processing & Management*, 36(6), 779–840.
+  *(Fundações teóricas do modelo probabilístico de relevância — leitura
+  densa mas essencial para entender por que BM25 funciona)*
+
+---
+
+### Distância de Edição e Approximate String Matching
+
+**Leitura fundamental** — um dos melhores surveys já escritos sobre o tema:
+
+- **Navarro, G.** (2001). A guided tour to approximate string matching.
+  *ACM Computing Surveys*, 33(1), 31–88.
+  https://dl.acm.org/doi/10.1145/375360.375365
+  *(Cobre Levenshtein, Damerau, Hamming, LCS, algoritmos de busca com
+  autômatos, bitmask tricks — o guia completo)*
+
+Os papers originais das métricas:
+
+- **Wagner, R.A., Fischer, M.J.** (1974). The string-to-string correction
+  problem. *Journal of the ACM*, 21(1), 168–173.
+  *(Formulação do algoritmo dinâmico para Levenshtein — mais rigoroso que
+  o paper do próprio Levenshtein)*
+
 - **Levenshtein, V.I.** (1966). Binary codes capable of correcting deletions,
   insertions, and reversals. *Soviet Physics Doklady*, 10(8), 707–710.
+  *(O paper original — curto, denso, impactante)*
+
 - **Damerau, F.J.** (1964). A technique for computer detection and correction
   of spelling errors. *Communications of the ACM*, 7(3), 171–176.
-- **Robertson, S. et al.** (1994). Some simple effective approximations to the
-  2-Poisson model for probabilistic weighted retrieval. *SIGIR '94*, 232–241.
-  *(BM25 original paper)*
-- **Zhao, W. et al.** (2024). Dense Text Retrieval based on Pretrained Language
-  Models: A Survey. *ACM TOIS*, 42(4). *(Vocabulário mismatch no contexto de
-  dense retrieval)*
-- **rapidfuzz documentation**: https://rapidfuzz.github.io/RapidFuzz/
-- **SQLite FTS5 tokenizers**: https://www.sqlite.org/fts5.html#tokenizers
-- **OpenClaw memory architecture**: https://openclawlab.com/en/docs/concepts/memory/
+  *(Adiciona transposição ao Levenshtein — fundamental para erros de digitação
+  reais, onde "il" → "li" é o erro mais comum)*
+
+- **Ukkonen, E.** (1985). Algorithms for approximate string matching.
+  *Information and Control*, 64(1–3), 100–118.
+  *(Algoritmo O(kn) para Levenshtein com cutoff k — base dos algoritmos
+  modernos de early-exit, como o usado pelo rapidfuzz)*
+
+- **Myers, G.** (1999). A fast bit-vector algorithm for approximate string
+  matching based on dynamic programming. *Journal of the ACM*, 46(3), 395–415.
+  *(O algoritmo "bit-parallel" que os sistemas de alto desempenho usam —
+  incluindo o rapidfuzz em C++)*
+
+---
+
+### Query Expansion
+
+- **Carpineto, C., Romano, G.** (2012). A survey of automatic query expansion
+  in information retrieval. *ACM Computing Surveys*, 44(1), 1–50.
+  *(O survey mais completo de query expansion — cobre pseudo-relevance
+  feedback, thesaurus-based expansion, e expansion via co-occurrence)*
+
+- **Berger, A., Lafferty, J.** (1999). Information retrieval as statistical
+  translation. *SIGIR '99*, 222–229.
+  *(Paper seminal que modela IR como problema de tradução automática —
+  base teórica para expansão de query via modelo de linguagem)*
+
+- **Voorhees, E.M.** (1994). Query expansion using lexical-semantic relations.
+  *SIGIR '94*, 61–69.
+  *(Expansão via WordNet — relevante como contraste: mostra por que
+  expansão ancorada no corpus (como a nossa) funciona melhor que expansão
+  via ontologia genérica para domínios técnicos)*
+
+---
+
+### Dense Retrieval e Sistemas Híbridos
+
+- **Karpukhin, V. et al.** (2020). Dense passage retrieval for open-domain
+  question answering. *EMNLP 2020*, 6769–6781.
+  https://arxiv.org/abs/2004.04906
+  *(DPR — o paper que estabeleceu dense retrieval como paradigma dominante;
+  contexto essencial para entender por que sistemas híbridos existem)*
+
+- **Zhao, W. et al.** (2024). Dense text retrieval based on pretrained language
+  models: A survey. *ACM Transactions on Information Systems*, 42(4).
+  https://arxiv.org/abs/2211.14876
+  *(Survey completo do estado da arte em dense retrieval — cobre o vocabulary
+  mismatch problem no contexto de embeddings)*
+
+- **Chen, J. et al.** (2022). ECIR 2022: Salient phrase aware dense retrieval.
+  *(Como sistemas híbridos tratam entidades nomeadas e identificadores técnicos
+  — exatamente o problema que temos com nomes de bibliotecas)*
+
+---
+
+### LLM como Query Rewriter (abordagem alternativa ao fuzzy)
+
+- **Gao, L. et al.** (2022). Precise zero-shot dense retrieval without
+  relevance labels. *arXiv:2212.10496*.
+  https://arxiv.org/abs/2212.10496
+  *(HyDE — Hypothetical Document Embeddings. Usa LLM para gerar um documento
+  hipotético que responderia a query, e embeda esse documento. Metodologia
+  elegante para quando o query e os documentos têm distribuições diferentes)*
+
+- **Wang, L. et al.** (2023). Query2Doc: Query expansion with large language
+  models. *EMNLP 2023*.
+  https://arxiv.org/abs/2303.07678
+  *(LLM gera um "pseudo-documento" que serve de expansão de query —
+  parente próximo do HyDE; fundamenta a abordagem LLM Query Rewriting)*
+
+- **Ma, X. et al.** (2023). Query rewriting for retrieval-augmented large
+  language models. *EMNLP 2023*.
+  https://arxiv.org/abs/2305.14283
+  *(Reescrita explícita de query pelo LLM em pipelines RAG — o caso de uso
+  mais próximo do que propomos com a skill /recall)*
+
+- **Jagerman, R., Zhuang, H., Qin, Z., Wang, X., Bendersky, M.** (2023).
+  Query expansion by prompting large language models.
+  *arXiv:2305.03653*.
+  https://arxiv.org/abs/2305.03653
+  *(Avaliação sistemática de LLM para query expansion — inclui análise de
+  quando funciona bem e quando falha; útil para calibrar expectativas)*
+
+---
+
+### Modelos de Embedding Multilíngues
+
+- **Team Qwen.** (2025). Qwen3 Embedding: Advancing Text Embedding and
+  Reranking through Foundation Models. *arXiv*.
+  https://arxiv.org/abs/2506.05176
+  *(Technical report do qwen3-embedding — nosso modelo atual. Seção 3
+  sobre instruction-aware embeddings é especialmente relevante)*
+
+- **Nussbaum, Z. et al.** (2024). Nomic Embed: Training a reproducible long
+  context text embedder. *arXiv:2402.01613*.
+  https://arxiv.org/abs/2402.01613
+  *(Technical report do nomic-embed-text — nosso modelo anterior.
+  Útil como baseline de comparação para entender o ganho do Qwen3)*
+
+- **Muennighoff, N. et al.** (2022). MTEB: Massive Text Embedding Benchmark.
+  *EACL 2023*. https://arxiv.org/abs/2210.07316
+  *(O benchmark que usamos para comparar modelos — entender como os scores
+  são calculados é essencial para interpretar os 69.45 do Qwen3 vs ~60 do nomic)*
+
+---
+
+### SymSpell — A Alternativa ao rapidfuzz não Mencionada no Plano V2
+
+Um algoritmo que merece estudo independente: o **SymSpell**, desenvolvido
+por Wolf Garbe. Não há paper formal, mas a publicação técnica é rigorosa:
+
+- **Garbe, W.** (2012, atualizado 2019). *1000x faster spelling correction
+  algorithm*. Publicação técnica.
+  https://wolfgarbe.medium.com/1000x-faster-spelling-correction-algorithm-using-symmetric-delete-spelling-correction-e8f7a28e2952
+
+  **Por que é relevante**: o SymSpell inverte o problema. Em vez de computar
+  distância de edição *da query para o vocabulário*, ele pré-computa todas as
+  palavras que estão a distância 1 e 2 do vocabulário por deleção, as armazena
+  num hash. Na busca, deleta caracteres da query e intersecciona com o hash.
+  Resultado: O(1) de lookup vs O(n×L²) do Levenshtein ingênuo.
+
+  Para vocabulários grandes e buscas frequentes, SymSpell é mais eficiente que
+  rapidfuzz. Para vocabulários pequenos (~5k tokens como o nosso) e buscas
+  ocasionais, o overhead de pré-computação não se justifica.
+
+  **Implementação Python**: `pip install symspellpy` (inclui suporte a
+  dicionários customizados — relevante para carregarmos o vocabulário FTS5).
+
+---
+
+### Inverted Index e FTS em Profundidade
+
+- **Zobel, J., Moffat, A.** (2006). Inverted files for text search engines.
+  *ACM Computing Surveys*, 38(2), article 6.
+  *(Referência fundamental para entender como o índice invertido do FTS5
+  funciona internamente — desde estruturas de dados até query processing)*
+
+- **SQLite FTS5 documentation** (2023). SQLite.org.
+  https://www.sqlite.org/fts5.html
+  *(A documentação oficial do FTS5 é excepcionalmente bem escrita —
+  especialmente as seções sobre tokenizers, BM25 implementation e
+  auxiliary functions como fts5vocab)*
+
+---
+
+### RAG (Retrieval-Augmented Generation) — Contexto Mais Amplo
+
+- **Lewis, P. et al.** (2020). Retrieval-augmented generation for
+  knowledge-intensive NLP tasks. *NeurIPS 2020*.
+  https://arxiv.org/abs/2005.11401
+  *(O paper RAG original da Meta — contextualiza o Total Recall dentro
+  do paradigma mais amplo de sistemas de memória aumentada)*
+
+- **Gao, Y. et al.** (2023). Retrieval-augmented generation for large
+  language models: A survey. *arXiv:2312.10997*.
+  https://arxiv.org/abs/2312.10997
+  *(Survey abrangente de RAG — cobre retrieval quality, query processing,
+  e avaliação de sistemas; seção 4 é especialmente relevante para nós)*
