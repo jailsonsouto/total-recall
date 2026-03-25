@@ -15,6 +15,30 @@ from .config import MAX_CHUNK_CHARS, CHUNK_OVERLAP_CHARS
 from .models import SessionInfo, Chunk
 
 
+# Marcadores que indicam conteúdo valioso em thinking/tool_result.
+# Se presentes, o bloco é indexado (com role separado e peso menor).
+_SELECTIVE_MARKERS = {
+    # Decisões
+    "decidimos", "decisao", "decisão", "adr", "trade-off", "tradeoff",
+    "escolhemos", "optamos", "vs", "ao invés de",
+    # Intenção do usuário
+    "o usuário quer", "o usuario quer", "o usuário pediu", "o usuario pediu",
+    # Planejamento
+    "preciso", "o plano é", "a estratégia", "arquitetura", "architecture",
+    # Problemas e diagnósticos
+    "o problema é", "o bug", "a causa", "root cause",
+    # Contexto técnico rico (tabelas, schemas, ADRs)
+    "schema", "create table", "migração", "migracao",
+    "custo zero", "latência local", "on-premise",
+}
+
+
+def _has_selective_markers(text: str) -> bool:
+    """Verifica se o texto contém marcadores de conteúdo valioso."""
+    lower = text.lower()
+    return any(marker in lower for marker in _SELECTIVE_MARKERS)
+
+
 def _parse_timestamp(ts: str) -> Optional[datetime]:
     """Converte ISO timestamp para datetime."""
     if not ts:
@@ -27,8 +51,7 @@ def _parse_timestamp(ts: str) -> Optional[datetime]:
 
 def _extract_text(content) -> str:
     """
-    Extrai texto puro de um campo content (str ou lista de blocos).
-    Ignora tool_use, tool_result e thinking — só indexa texto legível.
+    Extrai texto puro de blocos 'text' (resposta visível).
     """
     if isinstance(content, str):
         return content.strip()
@@ -46,6 +69,71 @@ def _extract_text(content) -> str:
                 parts.append(text)
 
     return "\n\n".join(parts)
+
+
+def _extract_selective_blocks(content) -> list[tuple[str, str]]:
+    """
+    Extrai blocos thinking/tool_result que contêm marcadores de decisão.
+
+    Retorna lista de (role_suffix, texto):
+      - ("thinking", "O usuário quer renomear...")
+      - ("tool_context", "ADR-001: ChromaDB local...")
+    """
+    if not isinstance(content, list):
+        return []
+
+    results = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+
+        btype = block.get("type", "")
+
+        if btype == "thinking":
+            text = block.get("thinking", "").strip()
+            if text and _has_selective_markers(text):
+                # Trunca thinking longos — pega só o trecho relevante
+                if len(text) > MAX_CHUNK_CHARS * 2:
+                    text = _extract_relevant_section(text)
+                if text:
+                    results.append(("thinking", text))
+
+        elif btype == "tool_result":
+            # tool_result.content pode ser string ou lista de blocos
+            raw = block.get("content", "")
+            if isinstance(raw, list):
+                raw = "\n".join(
+                    b.get("text", "") for b in raw
+                    if isinstance(b, dict)
+                )
+            text = str(raw).strip()
+            if text and _has_selective_markers(text):
+                if len(text) > MAX_CHUNK_CHARS * 2:
+                    text = _extract_relevant_section(text)
+                if text:
+                    results.append(("tool_context", text))
+
+    return results
+
+
+def _extract_relevant_section(text: str, window: int = 1500) -> str:
+    """
+    De um texto longo, extrai a seção ao redor do primeiro marcador encontrado.
+    Retorna ~window chars centrados no marcador.
+    """
+    lower = text.lower()
+    for marker in _SELECTIVE_MARKERS:
+        idx = lower.find(marker)
+        if idx >= 0:
+            start = max(0, idx - window // 2)
+            end = min(len(text), idx + window // 2)
+            section = text[start:end].strip()
+            if start > 0:
+                section = "..." + section
+            if end < len(text):
+                section = section + "..."
+            return section
+    return text[:window]
 
 
 def _chunk_text(text: str, max_chars: int, overlap: int) -> list[str]:
@@ -187,8 +275,9 @@ class SessionParser:
 
     def _build_chunks(self) -> list[Chunk]:
         """
-        Constrói chunks baseados em exchanges (user + assistant).
-        Cada exchange é uma unidade semântica.
+        Constrói chunks em duas passadas:
+          1. Exchanges (user + assistant text) — conteúdo principal
+          2. Blocos seletivos (thinking/tool_result com marcadores) — contexto extra
         """
         # Filtra user/assistant, ordena por timestamp, exclui sidechains
         messages = [
@@ -198,7 +287,7 @@ class SessionParser:
         ]
         messages.sort(key=lambda x: x.get("timestamp", ""))
 
-        # Emparelha user → assistant por parentUuid
+        # === PASSADA 1: exchanges (text blocks) ===
         exchanges = self._pair_exchanges(messages)
         chunks = []
 
@@ -235,7 +324,6 @@ class SessionParser:
             if not full_text.strip():
                 continue
 
-            # Chunka se necessário
             text_chunks = _chunk_text(full_text, MAX_CHUNK_CHARS, CHUNK_OVERLAP_CHARS)
 
             for ci, chunk_text in enumerate(text_chunks):
@@ -244,7 +332,7 @@ class SessionParser:
                 )
                 chunks.append(Chunk(
                     id=None,
-                    session_id="",  # preenchido pelo indexer
+                    session_id="",
                     role=role,
                     content=chunk_text,
                     timestamp=timestamp,
@@ -253,6 +341,35 @@ class SessionParser:
                     line_end=line_end,
                     metadata={"exchange_idx": idx, "sub_chunk": ci},
                 ))
+
+        # === PASSADA 2: blocos seletivos (thinking + tool_result) ===
+        assistant_entries = [
+            e for e in messages if e.get("type") == "assistant"
+        ]
+
+        for entry in assistant_entries:
+            content = entry.get("message", {}).get("content", [])
+            timestamp = _parse_timestamp(entry.get("timestamp", ""))
+            uid = entry.get("uuid")
+            line_num = self._line_map.get(uid) if uid else None
+
+            selective_blocks = _extract_selective_blocks(content)
+
+            for role_suffix, text in selective_blocks:
+                text_chunks = _chunk_text(text, MAX_CHUNK_CHARS, CHUNK_OVERLAP_CHARS)
+
+                for ci, chunk_text in enumerate(text_chunks):
+                    chunks.append(Chunk(
+                        id=None,
+                        session_id="",
+                        role=role_suffix,  # "thinking" ou "tool_context"
+                        content=chunk_text,
+                        timestamp=timestamp,
+                        chunk_index=len(chunks),
+                        line_start=line_num,
+                        line_end=line_num,
+                        metadata={"source": role_suffix, "sub_chunk": ci},
+                    ))
 
         return chunks
 
