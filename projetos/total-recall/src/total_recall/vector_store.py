@@ -4,16 +4,84 @@ vector_store.py — Busca vetorial + FTS5 (híbrida)
 
 Adaptado do padrão do Memória Viva. Três tabelas ligadas por rowid:
   chunks (metadados) ↔ chunks_vec (vetores) ↔ chunks_fts (texto)
+
+Pipeline de busca keyword (V02):
+  query → _normalize_technical() → _expand_abbreviations() → _expand_fuzzy() → FTS5
 """
 
 import json
+import re
 import struct
+import time
 from typing import Optional
 
-from .config import VECTOR_WEIGHT, TEXT_WEIGHT, EMBEDDING_DIMENSIONS
+from .config import (
+    VECTOR_WEIGHT, TEXT_WEIGHT, EMBEDDING_DIMENSIONS,
+    FUZZY_THRESHOLD, FUZZY_MAX_EXPANSIONS, FUZZY_MIN_TOKEN_LENGTH,
+)
 from .database import Database, serialize_vector
 from .embeddings import EmbeddingProvider
 from .models import SearchResult
+
+
+# ══════════════════════════════════════════════════════════════
+# V02 — Tabela de abreviações PT-BR para expansão de query
+# ══════════════════════════════════════════════════════════════
+
+_PT_ABBREVIATIONS: dict[str, list[str]] = {
+    # Pronomes
+    "vc":     ["você"],
+    "vcs":    ["vocês"],
+    "cê":     ["você"],
+    "cmg":    ["comigo"],
+    # Negação
+    "nao":    ["não"],
+    "ñ":      ["não"],
+    # Conectivos
+    "pq":     ["porque", "por que"],
+    "qdo":    ["quando"],
+    "qnd":    ["quando"],
+    "qto":    ["quanto"],
+    "tbm":    ["também"],
+    "tb":     ["também"],
+    "tmb":    ["também"],
+    "msm":    ["mesmo"],
+    # Intensidade
+    "mt":     ["muito"],
+    "mto":    ["muito"],
+    "muinto": ["muito"],
+    # Tempo
+    "hj":     ["hoje"],
+    "dps":    ["depois"],
+    "agr":    ["agora"],
+    "amanha": ["amanhã"],
+    # Cortesia
+    "obg":    ["obrigado", "obrigada"],
+    "pfv":    ["por favor"],
+    "pfvr":   ["por favor"],
+    "vlw":    ["valeu"],
+    "flw":    ["falou"],
+    # Confirmação
+    "blz":    ["beleza"],
+    "ctz":    ["certeza"],
+    "clr":    ["claro"],
+    # Localização / quantidade
+    "kd":     ["cadê", "onde"],
+    "td":     ["tudo"],
+    "nda":    ["nada"],
+    # Técnico (comum em sessões Claude Code)
+    "repo":   ["repositório", "repository"],
+    "deps":   ["dependências", "dependencies"],
+    "env":    ["ambiente", "environment"],
+    "db":     ["banco de dados", "database"],
+    "msg":    ["mensagem", "message"],
+    "msgs":   ["mensagens", "messages"],
+}
+
+
+def _normalize_technical(text: str) -> str:
+    """Normaliza separadores técnicos: sqlite-vec → sqlite vec, session_id → session id."""
+    return re.sub(r'[-_]', ' ', text).strip()
 
 
 class SQLiteVectorStore:
@@ -22,6 +90,7 @@ class SQLiteVectorStore:
     def __init__(self, db: Database, embed_provider: Optional[EmbeddingProvider]):
         self.db = db
         self.embed = embed_provider
+        self._vocab_cache: Optional[tuple[float, set[str]]] = None
 
     def _get_cached_embedding(self, conn, text: str) -> Optional[list[float]]:
         if not self.embed:
@@ -168,13 +237,116 @@ class SQLiteVectorStore:
 
             return results
 
+    # ══════════════════════════════════════════════════════════
+    # V02 — Pré-processamento de query (normalização + abreviações + fuzzy)
+    # ══════════════════════════════════════════════════════════
+
+    def _get_fts_vocabulary(self, conn) -> set[str]:
+        """Extrai tokens únicos do FTS5 via fts5vocab (cache 60s)."""
+        now = time.time()
+        if (self._vocab_cache is not None
+                and now - self._vocab_cache[0] < 60):
+            return self._vocab_cache[1]
+
+        try:
+            conn.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts_vocab "
+                "USING fts5vocab('chunks_fts', 'row')"
+            )
+            rows = conn.execute(
+                "SELECT term FROM chunks_fts_vocab "
+                "WHERE LENGTH(term) >= ?",
+                [FUZZY_MIN_TOKEN_LENGTH],
+            ).fetchall()
+            vocab = {r[0] for r in rows}
+        except Exception:
+            vocab = set()
+
+        self._vocab_cache = (now, vocab)
+        return vocab
+
+    def _fuzzy_find_variants(self, token: str, conn) -> list[str]:
+        """Busca variantes fuzzy de um token no vocabulário FTS5."""
+        try:
+            from rapidfuzz import process, fuzz
+        except ImportError:
+            return []
+
+        vocabulary = self._get_fts_vocabulary(conn)
+        if not vocabulary:
+            return []
+
+        matches = process.extract(
+            token, vocabulary,
+            scorer=fuzz.ratio,
+            limit=FUZZY_MAX_EXPANSIONS,
+            score_cutoff=FUZZY_THRESHOLD * 100,
+        )
+
+        return [m[0] for m in matches if m[0] != token]
+
+    def _build_fts_query(self, query: str, conn) -> str:
+        """Constrói query FTS5 com abreviações + fuzzy em uma única passada.
+
+        Para cada token:
+          1. Se é abreviação PT-BR → expande com OR-group
+          2. Se tem ≥ FUZZY_MIN_TOKEN_LENGTH chars → tenta fuzzy
+          3. Senão → usa literal entre aspas
+
+        Retorna query formatada para FTS5, ou None se nenhuma
+        expansão ocorreu (caller deve usar _sanitize_fts_query).
+        """
+        words = query.lower().split()
+        parts = []
+        any_expansion = False
+
+        for word in words:
+            clean = word.strip(".,!?;:")
+            if not clean or len(clean) < 2:
+                continue
+
+            # Prioridade 1: abreviações PT-BR
+            if clean in _PT_ABBREVIATIONS:
+                variants = [clean] + _PT_ABBREVIATIONS[clean]
+                group = " OR ".join(f'"{v}"' for v in variants)
+                parts.append(f"({group})")
+                any_expansion = True
+                continue
+
+            # Prioridade 2: fuzzy (tokens ≥ FUZZY_MIN_TOKEN_LENGTH)
+            if len(clean) >= FUZZY_MIN_TOKEN_LENGTH:
+                fuzzy_variants = self._fuzzy_find_variants(clean, conn)
+                if fuzzy_variants:
+                    all_forms = [clean] + fuzzy_variants
+                    group = " OR ".join(f'"{v}"' for v in all_forms)
+                    parts.append(f"({group})")
+                    any_expansion = True
+                    continue
+
+            parts.append(f'"{clean}"')
+
+        if any_expansion or len(parts) > 1:
+            return " OR ".join(parts)
+        if parts:
+            return parts[0]
+        return self._sanitize_fts_query(query)
+
+    # ══════════════════════════════════════════════════════════
+
     def keyword_search(self, query: str, n_results: int = 5,
                        session_id: Optional[str] = None) -> list[SearchResult]:
-        """Busca por palavra-chave via FTS5."""
-        # Sanitiza a query para FTS5: wrap em aspas se contém operadores
-        safe_query = self._sanitize_fts_query(query)
+        """Busca por palavra-chave via FTS5.
+
+        Pipeline V02:
+          query → normalize → (abbreviations + fuzzy) em passada única → FTS5
+        """
+        # V02 Passo 1: normalizar separadores técnicos
+        query = _normalize_technical(query)
 
         with self.db.connection() as conn:
+            # V02 Passos 2+3: abreviações + fuzzy em uma passada
+            safe_query = self._build_fts_query(query, conn)
+
             try:
                 fts_rows = conn.execute(
                     "SELECT rowid, rank FROM chunks_fts "
