@@ -5,7 +5,7 @@ cli.py — Interface de linha de comando do Total Recall
 import json
 import sys
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
@@ -14,6 +14,30 @@ from .config import DATA_DIR, DB_PATH, EXPORTS_PATH, SESSIONS_ROOT
 from .database import Database
 from .embeddings import get_embedding_provider
 from .models import highlight_text
+
+
+def _score_bar(score: float, width: int = 10) -> str:
+    """Barra visual de relevância: ▓▓▓▓▓▓░░░░"""
+    filled = max(0, min(width, int(score * width)))
+    return "▓" * filled + "░" * (width - filled)
+
+
+def _age_label(ts: datetime) -> str:
+    """Idade legível: 'há 2d', 'há 3h', etc."""
+    if not ts:
+        return ""
+    now = datetime.now(timezone.utc)
+    ts_utc = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+    delta = now - ts_utc
+    days = delta.days
+    if days > 30:
+        return f"ha {days // 30}m"
+    if days > 0:
+        return f"ha {days}d"
+    hours = delta.seconds // 3600
+    if hours > 0:
+        return f"ha {hours}h"
+    return "agora"
 
 
 @click.group()
@@ -187,7 +211,7 @@ def search(query, limit, session, fmt):
         }
         click.echo(json.dumps(output, ensure_ascii=False, indent=2))
     else:
-        # rich (default) — com highlighting e atribuição de fontes
+        # rich (default) — com highlighting, fontes e indicadores visuais
         if not ctx.results:
             click.echo(f"Nenhum resultado para: \"{query}\"")
             return
@@ -204,16 +228,20 @@ def search(query, limit, session, fmt):
                 label = "fuzzy" if exp["type"] == "fuzzy" else "abrev"
                 targets = ", ".join(exp["expanded"][:3])
                 exp_parts.append(f"{label}: {exp['original']} → {targets}")
-            click.echo(f"  Expansões: {'; '.join(exp_parts)}\n")
+            click.echo(f"  Expansoes: {'; '.join(exp_parts)}\n")
 
         # Collect highlight terms
         highlight_terms = _collect_highlight_terms(query, ctx.query_info)
 
         for i, r in enumerate(ctx.results, 1):
             ts = r.timestamp.strftime("%d/%m/%Y %H:%M") if r.timestamp else "?"
+            age = _age_label(r.timestamp) if r.timestamp else ""
             sources_str = " + ".join(s.upper() for s in r.sources) if r.sources else "?"
-            click.echo(f"  [{i}] {r.project_label} — {r.session_title}")
-            click.echo(f"      Sessão {r.session_id[:8]} | {ts} | score: {r.score:.3f} | via: {sources_str}")
+            bar = _score_bar(r.score)
+
+            click.echo(f"  [{i}] {bar} {r.score:.2f} | {r.project_label} — {r.session_title}")
+            click.echo(f"      Sessao {r.session_id[:8]} | {ts} ({age}) | {sources_str}")
+
             # Mostra trecho (primeiros 300 chars) com highlighting
             preview = r.content[:300].replace("\n", " ")
             if len(r.content) > 300:

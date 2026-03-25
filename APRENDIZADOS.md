@@ -126,3 +126,41 @@
     - `CREATE VIRTUAL TABLE chunks_fts_vocab USING fts5vocab('chunks_fts','row')` expõe os tokens
     - Cache de 60s evita recriar a cada busca
     - **Onde**: `vector_store.py:244-260` (_get_fts_vocabulary)
+
+## 2026-03-25 — V02.2: Threshold adaptativo, fontes e otimização do indexer
+
+19. **Threshold fixo de 85% é rígido demais para palavras curtas**
+    - `fuzz.ratio` penaliza substituição como 2 operações (delete+insert)
+    - 1 substituição em 4 chars = 75% (abaixo de 85%), em 5 chars = 80%, em 6 chars = 83.3%
+    - Resultado: `ABSE→ABSA`, `Nuvex→novex`, `Mexton→maxton` falhavam com threshold 85%
+    - Fix: threshold baixado para 70% — captura 1 substituição em qualquer palavra 4+ chars
+    - **Onde**: `config.py` (FUZZY_THRESHOLD = 0.70)
+
+20. **Doc count do fts5vocab é essencial para fuzzy inteligente**
+    - Problema 1: termos comuns (como=182 docs, sobre=75) recebiam fuzzy desnecessário → ruído
+    - Problema 2: termos raros que existiam no vocab (abse=3 docs) eram tratados como "exatos"
+    - Solução: `_get_fts_vocabulary` retorna `{term: doc_count}` em vez de `set`
+    - Heurística: `doc_count <= 10` → provável typo → expandir. `> 10` → termo real → literal
+    - Tiebreaker: fuzzy com mesma similaridade prefere termos com mais docs (absa=52 > abel=1)
+    - **Onde**: `vector_store.py` (_get_fts_vocabulary, _fuzzy_find_variants, _build_fts_query)
+
+21. **Indexação append-only é 10-50x mais rápida que delete+re-insert**
+    - Design original: sessão mudou → DELETE todos chunks → re-parse → re-insert tudo
+    - Com sessão de 6.8 MB (386 chunks), cada index reprocessava tudo mesmo por 5 msgs novas
+    - Fix: `_get_last_chunk_index()` identifica o último chunk indexado, pula os anteriores
+    - JSONL do Claude Code é append-only por design → seguro pular chunks existentes
+    - `--full` continua disponível para reindexação completa quando necessário
+    - **Onde**: `indexer.py` (_get_last_chunk_index, _index_single_file skip_until)
+
+22. **Atribuição de fonte por resultado permite diagnóstico de busca**
+    - Cada SearchResult agora tem `sources: list[str]` (["vector"], ["fts5"], ["vector", "fts5"])
+    - RecallContext inclui `query_info` com expansões fuzzy/abreviação aplicadas
+    - Permite ao usuário entender POR QUE um resultado apareceu
+    - **Onde**: `models.py` (SearchResult.sources), `vector_store.py` (hybrid_search tracking)
+
+23. **Highlighting de termos funciona diferente por formato**
+    - Terminal (rich): ANSI escape codes `\033[43m` (fundo amarelo) — visível direto no terminal
+    - Markdown (context/recall): `**bold**` — Claude preserva na resposta ao usuário
+    - Função `highlight_text()` genérica aceita mode="ansi" ou mode="markdown"
+    - Termos da query original E das expansões são highlightados
+    - **Onde**: `models.py` (highlight_text), `cli.py` (rich format), `models.py` (format_for_context)
