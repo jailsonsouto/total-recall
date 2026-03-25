@@ -54,12 +54,13 @@ class Indexer:
 
         # Descobre arquivos
         if full:
-            # Full: limpa tudo e redescobre
+            # Full: limpa tudo, recria vec table (pode ter mudado dimensão)
             with self.db.transaction() as conn:
                 conn.execute("DELETE FROM chunks_fts")
-                conn.execute("DELETE FROM chunks_vec")
                 conn.execute("DELETE FROM chunks")
                 conn.execute("DELETE FROM sessions")
+                conn.execute("DELETE FROM embedding_cache")
+            self.db.recreate_vec_table()
             files = self.discovery.discover()
         else:
             files = self.discovery.get_changed_files()
