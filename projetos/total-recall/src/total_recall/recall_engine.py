@@ -54,7 +54,7 @@ class RecallEngine:
             chunks_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
 
         # Busca híbrida (busca mais do que precisa para ter margem)
-        candidates = self.vector_store.hybrid_search(
+        candidates, query_info = self.vector_store.hybrid_search(
             query, n_results=limit * 3, session_id=session_id
         )
 
@@ -64,6 +64,7 @@ class RecallEngine:
                 results=[],
                 sessions_searched=sessions_count,
                 total_chunks=chunks_count,
+                query_info=query_info,
             )
 
         # Aplica peso por role (thinking/tool_context pesam menos)
@@ -91,6 +92,7 @@ class RecallEngine:
             results=results,
             sessions_searched=sessions_count,
             total_chunks=chunks_count,
+            query_info=query_info,
         )
 
     def _resolve_session_id(self, prefix: str) -> str:
