@@ -90,3 +90,39 @@
     - `CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(...)` não altera dimensão se tabela já existe
     - No full reindex, é obrigatório dropar e recriar com a nova dimensão
     - **Onde**: `database.py:164-170` (recreate_vec_table), `indexer.py:58-62`
+
+## 2026-03-25 — V02: Pipeline de busca com tolerância léxica
+
+14. **Normalização de separadores resolve classe inteira de erros sem deps externas**
+    - `sqlite-vec` e `sqlite_vec` e `sqlite vec` são tokens diferentes para FTS5
+    - Solução: `re.sub(r'[-_]', ' ', text)` aplicada na query (não no índice)
+    - Cobre: `total-recall`↔`total recall`, `session_id`↔`session id`
+    - Não requer `--full` reindex — atua só em query-time
+    - **Onde**: `vector_store.py:82-84` (_normalize_technical)
+
+15. **Abreviações PT-BR e fuzzy devem ser processados em passada única sobre tokens crus**
+    - Primeira tentativa: pipeline sequencial (abbreviations → fuzzy) falhava
+    - O fuzzy recebia a query já formatada com `("vc" OR "você")` e corrompia a sintaxe FTS5
+    - Solução: `_build_fts_query()` itera sobre tokens crus uma única vez — para cada token, checa abreviação primeiro, depois fuzzy
+    - **Onde**: `vector_store.py:280-320` (_build_fts_query)
+
+16. **OR entre grupos é obrigatório para queries multi-palavra**
+    - FTS5 trata espaço entre tokens como AND implícito
+    - `"como" "decidimos" "sobre" "sqlite"` exige TODOS os termos → muito restritivo
+    - O `_sanitize_fts_query` antigo usava OR explícito; a V02 deve manter
+    - BM25 naturalmente rankeia mais alto documentos com mais matches
+    - **Onde**: `vector_store.py:318` (OR join)
+
+17. **rapidfuzz (C++) é 257x mais rápido que Levenshtein em Python puro**
+    - Benchmark real sobre vocabulário FTS5 do Total Recall (5.413 termos):
+    - Python puro: ~48 ms por token, ~236 ms para pipeline de 5 tokens
+    - rapidfuzz: 0.2 ms por token, 0.9 ms para pipeline de 5 tokens
+    - Overhead sobre FTS5 puro: +0.2 ms (40% do baseline de 0.4 ms)
+    - Em Python puro, a busca degradaria de 0.4 ms para ~48 ms — inaceitável
+    - **Onde**: `vector_store.py:262-278` (_fuzzy_find_variants)
+
+18. **fts5vocab é virtual table que precisa ser criada explicitamente**
+    - O vocabulário do FTS5 não é diretamente acessível
+    - `CREATE VIRTUAL TABLE chunks_fts_vocab USING fts5vocab('chunks_fts','row')` expõe os tokens
+    - Cache de 60s evita recriar a cada busca
+    - **Onde**: `vector_store.py:244-260` (_get_fts_vocabulary)
