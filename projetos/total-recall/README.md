@@ -244,4 +244,10 @@ Para corpora maiores, a primeira alavanca de otimização é a redução de dime
 
 ---
 
+## Referências e Inspiração
+
+O design do pipeline de busca — busca híbrida vetor+BM25, MMR, temporal decay e sqlite-vec — converge com a arquitetura documentada pelo [OpenClaw](https://openclawlab.com/en/docs/concepts/memory/), que serviu como referência de validação durante o projeto. A implementação é independente: escrita em Python, específica para o formato de sessões do Claude Code CLI, e com extensões originais como exchange-based chunking, indexação seletiva de blocos internos (`thinking`/`tool_result`), decay com exceção para decisões arquiteturais, e role weights por tipo de conteúdo. Nenhum código foi derivado do OpenClaw.
+
+---
+
 *Projeto independente. Não tem vínculo com o Memória Viva — pode copiar padrões, nunca editar.*
