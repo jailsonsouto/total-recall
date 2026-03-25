@@ -35,9 +35,23 @@ SESSIONS_ROOT = Path(os.getenv(
 # EMBEDDING
 # ══════════════════════════════════════════════════════════════
 
-EMBED_PROVIDER = os.getenv("TOTAL_RECALL_EMBED_PROVIDER", "nomic")
-EMBEDDING_DIMENSIONS = 768 if EMBED_PROVIDER == "nomic" else 1536
-NOMIC_MODEL = "nomic-embed-text"
+EMBED_PROVIDER = os.getenv("TOTAL_RECALL_EMBED_PROVIDER", "ollama")
+
+# Ollama (default)
+OLLAMA_BASE_URL = os.getenv("TOTAL_RECALL_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+OLLAMA_EMBED_MODEL = os.getenv("TOTAL_RECALL_OLLAMA_MODEL", "qwen3-embedding:4b")
+
+# Dimensão dos vetores (1024 = bom equilíbrio para busca híbrida)
+EMBEDDING_DIMENSIONS = int(os.getenv("TOTAL_RECALL_EMBEDDING_DIMENSIONS", "1024"))
+
+# Instrução para queries (Qwen é instruction-aware)
+EMBED_QUERY_INSTRUCTION = os.getenv(
+    "TOTAL_RECALL_EMBED_QUERY_INSTRUCTION",
+    "Given a search query in Portuguese or English, "
+    "retrieve relevant Claude Code conversation passages that answer the query."
+)
+
+# OpenAI (alternativa paga)
 OPENAI_EMBED_MODEL = "text-embedding-3-small"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 

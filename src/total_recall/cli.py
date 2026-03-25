@@ -38,10 +38,11 @@ def init():
     # 3. Testa embedding
     provider = get_embedding_provider()
     if provider:
-        click.echo(f"  Embedding: {provider.model_name} ({provider.dimensions()} dims)")
+        click.echo(f"  Embedding: ollama / {provider.model_name} ({provider.dimensions()} dims)")
     else:
         click.echo("  Embedding: INDISPONIVEL (FTS5-only mode)")
-        click.echo("    Dica: instale Ollama e rode 'ollama pull nomic-embed-text'")
+        from .config import OLLAMA_EMBED_MODEL
+        click.echo(f"    Dica: instale Ollama e rode 'ollama pull {OLLAMA_EMBED_MODEL}'")
 
     # 4. Verifica sessões
     if SESSIONS_ROOT.exists():
@@ -103,9 +104,11 @@ def status():
     # Embedding
     provider = get_embedding_provider()
     if provider:
-        click.echo(f"  Embedding: {provider.model_name} (OK)")
+        click.echo(f"  Embedding: ollama / {provider.model_name} ({provider.dimensions()} dims)")
     else:
-        click.echo("  Embedding: INDISPONIVEL (modo FTS5-only)")
+        from .config import OLLAMA_EMBED_MODEL, EMBEDDING_DIMENSIONS
+        click.echo(f"  Embedding: INDISPONIVEL (modo FTS5-only)")
+        click.echo(f"    Esperado: {OLLAMA_EMBED_MODEL} ({EMBEDDING_DIMENSIONS} dims)")
 
     # Sessões disponíveis
     if SESSIONS_ROOT.exists():

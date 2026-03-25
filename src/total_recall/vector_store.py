@@ -10,7 +10,7 @@ import json
 import struct
 from typing import Optional
 
-from .config import VECTOR_WEIGHT, TEXT_WEIGHT
+from .config import VECTOR_WEIGHT, TEXT_WEIGHT, EMBEDDING_DIMENSIONS
 from .database import Database, serialize_vector
 from .embeddings import EmbeddingProvider
 from .models import SearchResult
@@ -46,14 +46,19 @@ class SQLiteVectorStore:
             [text_hash, serialize_vector(vector), self.embed.model_name],
         )
 
-    def _embed_with_cache(self, conn, text: str) -> Optional[list[float]]:
+    def _embed_with_cache(self, conn, text: str,
+                          kind: str = "document") -> Optional[list[float]]:
+        """Embeda com cache. kind='query' usa instrução, 'document' não."""
         if not self.embed:
             return None
         cached = self._get_cached_embedding(conn, text)
         if cached:
             return cached
         try:
-            vector = self.embed.embed(text)
+            if kind == "query":
+                vector = self.embed.embed_query(text)
+            else:
+                vector = self.embed.embed_document(text)
             self._cache_embedding(conn, text, vector)
             return vector
         except Exception:
@@ -114,7 +119,7 @@ class SQLiteVectorStore:
             return []
 
         try:
-            query_vector = self.embed.embed(query)
+            query_vector = self.embed.embed_query(query)
         except Exception:
             return []
 

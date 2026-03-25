@@ -161,3 +161,12 @@ class Database:
                     errors          TEXT
                 )
             """)
+
+    def recreate_vec_table(self):
+        """Recria chunks_vec com a dimensão atual (para migração de modelo)."""
+        with self.transaction() as conn:
+            conn.execute("DROP TABLE IF EXISTS chunks_vec")
+            conn.execute(f"""
+                CREATE VIRTUAL TABLE chunks_vec
+                USING vec0(embedding float[{EMBEDDING_DIMENSIONS}])
+            """)
