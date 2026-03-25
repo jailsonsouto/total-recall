@@ -166,42 +166,62 @@ O re-ranking por Maximal Marginal Relevance garante que os 5 resultados não sej
 
 ## 4. Erros de digitação e variações
 
-Esta é uma pergunta importante, então a resposta é direta e honesta.
+A partir da V02, o Total Recall tem três camadas de tolerância léxica que
+corrigem automaticamente erros comuns de digitação. Você não precisa fazer
+nada — a correção acontece na hora da busca.
 
-### O motor vetorial tolera, o FTS5 não
+### O que é corrigido automaticamente
 
-Se você digitar **"novax"** em vez de **"novex"**:
-
-- **FTS5** não vai encontrar. O índice de texto completo é literal — procura os tokens exatos. "novax" ≠ "novex".
-- **Motor vetorial** *pode* encontrar, dependendo de quanto a diferença altera o significado semântico do contexto. Para nomes próprios e identificadores curtos, a diferença tende a ser pequena demais para o vetor compensar.
-
-Na prática: **uma letra diferente num nome específico** tende a falhar. Não há correção ortográfica embutida.
-
-### Como contornar
-
-**Use palavras do contexto, não o termo exato:**
+**Separadores técnicos** — hífens e underscores são tratados como espaços:
 
 ```bash
-# Frágil — depende do nome correto
-total-recall search "pasta novex"
+total-recall search "total recall"    # encontra "total-recall"
+total-recall search "session id"      # encontra "session_id"
+total-recall search "sqlite vec"      # encontra "sqlite-vec"
+```
 
-# Robusto — descreve o que aconteceu
+**Abreviações PT-BR** — 38 abreviações informais são expandidas:
+
+```bash
+total-recall search "vc decidiu"      # encontra "você decidiu"
+total-recall search "pq escolhemos"   # encontra "porque escolhemos"
+total-recall search "tbm quero"       # encontra "também quero"
+```
+
+Lista parcial: `vc→você`, `pq→porque`, `tbm→também`, `hj→hoje`, `mt→muito`,
+`nao→não`, `blz→beleza`, `vlw→valeu`, `repo→repositório`, `db→database`, `msg→mensagem`.
+
+**Erros de digitação** (via rapidfuzz) — para palavras com 4+ caracteres,
+o sistema busca variantes similares no vocabulário indexado:
+
+```bash
+total-recall search "sqilte"          # encontra "sqlite"
+total-recall search "chromdb"         # encontra "chromadb"
+total-recall search "embeding"        # encontra "embedding"
+```
+
+O threshold de similaridade é 85% — erros de 1-2 caracteres em palavras
+com 5+ letras são corrigidos. Palavras curtas (≤ 3 chars) não passam pelo
+fuzzy para evitar falsos positivos.
+
+### O que NÃO é corrigido
+
+- **Palavras completamente diferentes**: `busca` não encontra `pesquisa` via FTS5
+  (o motor vetorial pode cobrir isso semanticamente)
+- **Abreviações não cadastradas**: apenas as 38 da tabela interna são expandidas
+- **UUIDs e session IDs**: nunca são expandidos por fuzzy
+
+### Dica: queries descritivas continuam sendo mais robustas
+
+Mesmo com a tolerância léxica, uma query descritiva sempre funciona melhor
+que um termo isolado:
+
+```bash
+# Bom — encontra pelo contexto
 total-recall search "renomear pasta agente de memória"
-total-recall search "pasta projeto renomeada para memoria-viva"
-```
 
-**Use termos que certamente estão na conversa:**
-
-```bash
-# Se você sabe que a decisão foi sobre organização de pastas
-total-recall search "estrutura de diretórios do projeto"
-```
-
-**Tente variações:**
-
-```bash
-total-recall search "novex"
-total-recall search "novax"   # só para comparar
+# Também funciona agora — corrige o typo
+total-recall search "sqilte vec configuração"
 ```
 
 ### Queries em inglês encontram conteúdo em português (e vice-versa)
