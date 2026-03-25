@@ -11,11 +11,31 @@ Arquivos sincronizados via OneDrive (disponível no Mac e Windows).
 
 ## Projetos ativos
 - `projetos/memoria-viva/` — agente de memória viva (MVP implementado)
+- `projetos/total-recall/` — memória pesquisável para sessões Claude Code
+- `projetos/vozes-da-comunidade/` — ABSA/ASTE para análise de sentimento
+
+## Total Recall — memória de longo prazo
+
+O comando `total-recall` indexa TODAS as sessões passadas do Claude Code
+e permite busca semântica + keyword. Está instalado em `~/.local/bin/total-recall`.
+
+**Quando consultar:**
+- Quando o usuário mencionar algo de uma sessão passada ("lembra quando...", "como fizemos...")
+- Quando precisar de contexto histórico sobre uma decisão
+- Quando iniciar trabalho num projeto que já foi discutido antes
+- Quando o usuário usar `/recall`
+
+**Como consultar:**
+```bash
+total-recall search "query aqui" --format context --limit 5
+```
+
+**Manter atualizado:** rodar `total-recall index` no início de sessões longas.
 
 ## Contexto de trabalho
 - Desenvolvimento no MacBook M1 (casa) e Windows 11 (trabalho, OneDrive)
 - Usar `CLAUDE.md` em cada subprojeto para contexto específico
-- Git remote: a configurar (GitHub)
+- Git remote: https://github.com/jailsonsouto/agentes
 
 ## Convenções
 - Commits frequentes com mensagens descritivas

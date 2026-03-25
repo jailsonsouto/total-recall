@@ -44,6 +44,10 @@ class RecallEngine:
         3. Aplica MMR para diversidade
         4. Retorna RecallContext formatado
         """
+        # Resolve session_id prefix → full UUID
+        if session_id:
+            session_id = self._resolve_session_id(session_id)
+
         # Stats
         with self.db.connection() as conn:
             sessions_count = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
@@ -62,6 +66,17 @@ class RecallEngine:
                 total_chunks=chunks_count,
             )
 
+        # Aplica peso por role (thinking/tool_context pesam menos)
+        _ROLE_WEIGHTS = {
+            "exchange": 1.0,
+            "user": 1.0,
+            "assistant": 1.0,
+            "thinking": 0.6,
+            "tool_context": 0.7,
+        }
+        for r in candidates:
+            r.score *= _ROLE_WEIGHTS.get(r.role, 1.0)
+
         # Aplica temporal decay
         now = datetime.now(timezone.utc)
         for r in candidates:
@@ -77,6 +92,19 @@ class RecallEngine:
             sessions_searched=sessions_count,
             total_chunks=chunks_count,
         )
+
+    def _resolve_session_id(self, prefix: str) -> str:
+        """Resolve prefixo de session_id para UUID completo."""
+        if len(prefix) >= 36:  # já é UUID completo
+            return prefix
+        with self.db.connection() as conn:
+            row = conn.execute(
+                "SELECT session_id FROM sessions WHERE session_id LIKE ?",
+                [prefix + "%"],
+            ).fetchone()
+            if row:
+                return row[0]
+        return prefix  # não encontrou, retorna como está
 
     def _temporal_decay(self, base_score: float,
                         timestamp: Optional[datetime],
