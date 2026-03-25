@@ -13,6 +13,7 @@ import click
 from .config import DATA_DIR, DB_PATH, EXPORTS_PATH, SESSIONS_ROOT
 from .database import Database
 from .embeddings import get_embedding_provider
+from .models import highlight_text
 
 
 @click.group()
@@ -178,25 +179,62 @@ def search(query, limit, session, fmt):
                 "timestamp": r.timestamp.isoformat() if r.timestamp else None,
                 "score": r.score,
                 "role": r.role,
+                "sources": r.sources,
             })
-        click.echo(json.dumps(results, ensure_ascii=False, indent=2))
+        output = {
+            "results": results,
+            "query_info": ctx.query_info,
+        }
+        click.echo(json.dumps(output, ensure_ascii=False, indent=2))
     else:
-        # rich (default)
+        # rich (default) — com highlighting e atribuição de fontes
         if not ctx.results:
             click.echo(f"Nenhum resultado para: \"{query}\"")
             return
 
+        use_color = sys.stdout.isatty()
+
         click.echo(f"Resultados para: \"{query}\" ({len(ctx.results)} encontrados)\n")
+
+        # Expansion summary
+        expansions = ctx.query_info.get("expansions", [])
+        if expansions:
+            exp_parts = []
+            for exp in expansions:
+                label = "fuzzy" if exp["type"] == "fuzzy" else "abrev"
+                targets = ", ".join(exp["expanded"][:3])
+                exp_parts.append(f"{label}: {exp['original']} → {targets}")
+            click.echo(f"  Expansões: {'; '.join(exp_parts)}\n")
+
+        # Collect highlight terms
+        highlight_terms = _collect_highlight_terms(query, ctx.query_info)
+
         for i, r in enumerate(ctx.results, 1):
             ts = r.timestamp.strftime("%d/%m/%Y %H:%M") if r.timestamp else "?"
+            sources_str = " + ".join(s.upper() for s in r.sources) if r.sources else "?"
             click.echo(f"  [{i}] {r.project_label} — {r.session_title}")
-            click.echo(f"      Sessão {r.session_id[:8]} | {ts} | score: {r.score:.3f}")
-            # Mostra trecho (primeiros 300 chars)
+            click.echo(f"      Sessão {r.session_id[:8]} | {ts} | score: {r.score:.3f} | via: {sources_str}")
+            # Mostra trecho (primeiros 300 chars) com highlighting
             preview = r.content[:300].replace("\n", " ")
             if len(r.content) > 300:
                 preview += "..."
+            if use_color and highlight_terms:
+                preview = highlight_text(preview, highlight_terms, mode="ansi")
             click.echo(f"      {preview}")
             click.echo()
+
+
+def _collect_highlight_terms(query: str, query_info: dict) -> list[str]:
+    """Coleta termos para highlighting a partir da query e expansões."""
+    terms = set()
+    for word in query.lower().split():
+        clean = word.strip(".,!?;:")
+        if clean and len(clean) >= 2:
+            terms.add(clean)
+    for exp in query_info.get("expansions", []):
+        for expanded in exp["expanded"]:
+            terms.add(expanded.lower())
+    return sorted(terms, key=len, reverse=True)
 
 
 @main.command()

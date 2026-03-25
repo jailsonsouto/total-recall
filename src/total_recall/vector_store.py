@@ -90,7 +90,7 @@ class SQLiteVectorStore:
     def __init__(self, db: Database, embed_provider: Optional[EmbeddingProvider]):
         self.db = db
         self.embed = embed_provider
-        self._vocab_cache: Optional[tuple[float, set[str]]] = None
+        self._vocab_cache: Optional[tuple[float, dict[str, int]]] = None
 
     def _get_cached_embedding(self, conn, text: str) -> Optional[list[float]]:
         if not self.embed:
@@ -241,8 +241,12 @@ class SQLiteVectorStore:
     # V02 — Pré-processamento de query (normalização + abreviações + fuzzy)
     # ══════════════════════════════════════════════════════════
 
-    def _get_fts_vocabulary(self, conn) -> set[str]:
-        """Extrai tokens únicos do FTS5 via fts5vocab (cache 60s)."""
+    def _get_fts_vocabulary(self, conn) -> dict[str, int]:
+        """Extrai tokens do FTS5 com doc count via fts5vocab (cache 60s).
+
+        Retorna {term: doc_count} — permite distinguir termos comuns
+        de termos raros (prováveis typos ou menções pontuais).
+        """
         now = time.time()
         if (self._vocab_cache is not None
                 and now - self._vocab_cache[0] < 60):
@@ -254,38 +258,51 @@ class SQLiteVectorStore:
                 "USING fts5vocab('chunks_fts', 'row')"
             )
             rows = conn.execute(
-                "SELECT term FROM chunks_fts_vocab "
+                "SELECT term, doc FROM chunks_fts_vocab "
                 "WHERE LENGTH(term) >= ?",
                 [FUZZY_MIN_TOKEN_LENGTH],
             ).fetchall()
-            vocab = {r[0] for r in rows}
+            vocab = {r[0]: r[1] for r in rows}
         except Exception:
-            vocab = set()
+            vocab = {}
 
         self._vocab_cache = (now, vocab)
         return vocab
 
     def _fuzzy_find_variants(self, token: str, conn) -> list[str]:
-        """Busca variantes fuzzy de um token no vocabulário FTS5."""
+        """Busca variantes fuzzy de um token no vocabulário FTS5.
+
+        Usa doc count como desempate: termos comuns (absa=52 docs)
+        são preferidos sobre raros (abel=1 doc) em caso de mesma
+        similaridade. Isso resolve typos para o termo correto.
+        """
         try:
             from rapidfuzz import process, fuzz
         except ImportError:
             return []
 
-        vocabulary = self._get_fts_vocabulary(conn)
-        if not vocabulary:
+        vocab = self._get_fts_vocabulary(conn)
+        if not vocab:
             return []
 
+        # Busca mais candidatos para ter margem de seleção
         matches = process.extract(
-            token, vocabulary,
+            token, list(vocab.keys()),
             scorer=fuzz.ratio,
-            limit=FUZZY_MAX_EXPANSIONS,
+            limit=FUZZY_MAX_EXPANSIONS * 3,
             score_cutoff=FUZZY_THRESHOLD * 100,
         )
 
-        return [m[0] for m in matches if m[0] != token]
+        # Filtra self-match e ordena por score desc, doc_count desc
+        candidates = [
+            (m[0], m[1], vocab.get(m[0], 0))
+            for m in matches if m[0] != token
+        ]
+        candidates.sort(key=lambda x: (-x[1], -x[2]))
 
-    def _build_fts_query(self, query: str, conn) -> str:
+        return [c[0] for c in candidates[:FUZZY_MAX_EXPANSIONS]]
+
+    def _build_fts_query(self, query: str, conn) -> tuple[str, list[dict]]:
         """Constrói query FTS5 com abreviações + fuzzy em uma única passada.
 
         Para cada token:
@@ -293,12 +310,13 @@ class SQLiteVectorStore:
           2. Se tem ≥ FUZZY_MIN_TOKEN_LENGTH chars → tenta fuzzy
           3. Senão → usa literal entre aspas
 
-        Retorna query formatada para FTS5, ou None se nenhuma
-        expansão ocorreu (caller deve usar _sanitize_fts_query).
+        Retorna (query_fts5, expansions) onde expansions é lista de
+        dicts com {original, expanded, type}.
         """
         words = query.lower().split()
         parts = []
         any_expansion = False
+        expansions: list[dict] = []
 
         for word in words:
             clean = word.strip(".,!?;:")
@@ -311,41 +329,65 @@ class SQLiteVectorStore:
                 group = " OR ".join(f'"{v}"' for v in variants)
                 parts.append(f"({group})")
                 any_expansion = True
+                expansions.append({
+                    "original": clean,
+                    "expanded": _PT_ABBREVIATIONS[clean],
+                    "type": "abbreviation",
+                })
                 continue
 
-            # Prioridade 2: fuzzy (tokens ≥ FUZZY_MIN_TOKEN_LENGTH)
+            # Prioridade 2: fuzzy — para typos e termos raros
+            # Termos comuns (>10 docs) são usados literalmente.
+            # Termos raros (≤10 docs) ou ausentes podem ser typos → expandir.
             if len(clean) >= FUZZY_MIN_TOKEN_LENGTH:
-                fuzzy_variants = self._fuzzy_find_variants(clean, conn)
-                if fuzzy_variants:
-                    all_forms = [clean] + fuzzy_variants
-                    group = " OR ".join(f'"{v}"' for v in all_forms)
-                    parts.append(f"({group})")
-                    any_expansion = True
-                    continue
+                vocab = self._get_fts_vocabulary(conn)
+                doc_count = vocab.get(clean, 0)
+                if doc_count <= 10:  # ausente ou raro → provável typo
+                    fuzzy_variants = self._fuzzy_find_variants(clean, conn)
+                    if fuzzy_variants:
+                        all_forms = [clean] + fuzzy_variants
+                        group = " OR ".join(f'"{v}"' for v in all_forms)
+                        parts.append(f"({group})")
+                        any_expansion = True
+                        expansions.append({
+                            "original": clean,
+                            "expanded": fuzzy_variants,
+                            "type": "fuzzy",
+                        })
+                        continue
 
             parts.append(f'"{clean}"')
 
         if any_expansion or len(parts) > 1:
-            return " OR ".join(parts)
+            return " OR ".join(parts), expansions
         if parts:
-            return parts[0]
-        return self._sanitize_fts_query(query)
+            return parts[0], expansions
+        return self._sanitize_fts_query(query), expansions
 
     # ══════════════════════════════════════════════════════════
 
     def keyword_search(self, query: str, n_results: int = 5,
-                       session_id: Optional[str] = None) -> list[SearchResult]:
+                       session_id: Optional[str] = None
+                       ) -> tuple[list['SearchResult'], dict]:
         """Busca por palavra-chave via FTS5.
 
         Pipeline V02:
           query → normalize → (abbreviations + fuzzy) em passada única → FTS5
+
+        Retorna (results, query_info) com metadados de expansão.
         """
         # V02 Passo 1: normalizar separadores técnicos
         query = _normalize_technical(query)
 
         with self.db.connection() as conn:
             # V02 Passos 2+3: abreviações + fuzzy em uma passada
-            safe_query = self._build_fts_query(query, conn)
+            safe_query, expansions = self._build_fts_query(query, conn)
+
+            query_info = {
+                "normalized_query": query,
+                "fts_query": safe_query,
+                "expansions": expansions,
+            }
 
             try:
                 fts_rows = conn.execute(
@@ -355,10 +397,10 @@ class SQLiteVectorStore:
                 ).fetchall()
             except Exception:
                 # Se FTS query falha, tenta busca simples com LIKE
-                return self._fallback_like_search(conn, query, n_results, session_id)
+                return self._fallback_like_search(conn, query, n_results, session_id), query_info
 
             if not fts_rows:
-                return []
+                return [], query_info
 
             results = []
             for row in fts_rows:
@@ -392,15 +434,19 @@ class SQLiteVectorStore:
                 if len(results) >= n_results:
                     break
 
-            return results
+            return results, query_info
 
     def hybrid_search(self, query: str, n_results: int = 5,
                       session_id: Optional[str] = None,
                       vector_weight: float = VECTOR_WEIGHT,
-                      text_weight: float = TEXT_WEIGHT) -> list[SearchResult]:
-        """Combina busca vetorial + keyword com pesos configuráveis."""
+                      text_weight: float = TEXT_WEIGHT
+                      ) -> tuple[list['SearchResult'], dict]:
+        """Combina busca vetorial + keyword com pesos configuráveis.
+
+        Retorna (results, query_info) com atribuição de fonte por resultado.
+        """
         vector_results = self.search(query, n_results * 2, session_id)
-        keyword_results = self.keyword_search(query, n_results * 2, session_id)
+        keyword_results, query_info = self.keyword_search(query, n_results * 2, session_id)
 
         scored: dict[str, dict] = {}
 
@@ -409,16 +455,19 @@ class SQLiteVectorStore:
             scored[key] = {
                 "result": r,
                 "score": vector_weight * r.score,
+                "sources": ["vector"],
             }
 
         for r in keyword_results:
             key = f"{r.session_id}:{r.content[:100]}"
             if key in scored:
                 scored[key]["score"] += text_weight * r.score
+                scored[key]["sources"].append("fts5")
             else:
                 scored[key] = {
                     "result": r,
                     "score": text_weight * r.score,
+                    "sources": ["fts5"],
                 }
 
         ranked = sorted(scored.values(), key=lambda x: x["score"], reverse=True)
@@ -427,9 +476,10 @@ class SQLiteVectorStore:
         for item in ranked[:n_results]:
             r = item["result"]
             r.score = item["score"]
+            r.sources = list(dict.fromkeys(item["sources"]))  # deduplicate
             results.append(r)
 
-        return results
+        return results, query_info
 
     def _sanitize_fts_query(self, query: str) -> str:
         """Sanitiza query para FTS5 — wrap em aspas se tem caracteres especiais."""
