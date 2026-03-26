@@ -377,13 +377,42 @@ A skill só encontra o que já está indexado. Se você teve uma conversa hoje e
 
 ## 7. Rotina recomendada
 
-### No início de cada sessão de trabalho
+### Indexação automática via hooks (recomendado)
 
-```bash
-total-recall index
+Em vez de rodar `total-recall index` manualmente, configure dois hooks no Claude Code que disparam automaticamente:
+
+```json
+// ~/.claude/settings.json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "total-recall index" }]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "total-recall index" }]
+      }
+    ]
+  }
+}
 ```
 
-Captura tudo que foi discutido desde a última vez. Rápido (incremental).
+**`SessionStart`** garante que ao abrir qualquer sessão do Claude Code, tudo de sessões anteriores já está indexado e pesquisável.
+
+**`PreCompact`** indexa o conteúdo da sessão atual antes que o Claude compacte o contexto por limite de tokens. Sem esse hook, conteúdo recente de sessões longas só ficaria disponível no `/recall` após encerrar a sessão.
+
+Se o Ollama não estiver ativo quando o hook disparar, o total-recall indexa via FTS5 (busca por keywords continua funcionando) e adiciona os embeddings vetoriais na próxima vez que o Ollama estiver disponível.
+
+### Indexação manual (quando necessário)
+
+```bash
+total-recall index        # incremental — só sessões novas ou que cresceram
+total-recall index --full # reindexação completa — obrigatório ao trocar de modelo
+```
 
 ### Durante a sessão
 
@@ -391,15 +420,7 @@ Use `/recall` livremente no Claude Code. Não precisa sair para o terminal.
 
 ### Ao trocar de máquina
 
-O banco fica em `~/.total-recall/total-recall.db` — local, não sincronizado. No Windows, rode `total-recall index` para construir o índice local com as sessões disponíveis naquele ambiente.
-
-### Ao mudar o modelo de embedding
-
-```bash
-total-recall index --full
-```
-
-Obrigatório. O banco precisa ser recriado com os novos vetores.
+O banco fica em `~/.total-recall/total-recall.db`, local e não sincronizado. No novo ambiente, rode `total-recall index` para construir o índice local com as sessões disponíveis.
 
 ---
 

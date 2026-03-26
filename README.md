@@ -125,6 +125,8 @@ total-recall index
 
 Pronto. Suas sessões do Claude Code estão indexadas e pesquisáveis.
 
+**Indexação automática** (recomendado): configure dois hooks em `~/.claude/settings.json` para que o índice seja atualizado automaticamente ao abrir cada sessão e antes de compactações de contexto. Detalhes em [docs/GUIA-USUARIO.md](docs/GUIA-USUARIO.md#7-rotina-recomendada).
+
 **Acesso global** (sem ativar o venv manualmente em cada terminal):
 
 ```bash
