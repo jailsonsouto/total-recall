@@ -213,3 +213,19 @@
     - 15/15 casos de teste passam: PLN, NER, NLP, SQL, API, GPU, PLN+NER+BERTimbau, MLEGCN e regressões
     - Regra geral: qualquer token que começa com 2+ maiúsculas é tratado como termo técnico, não como palavra comum
     - **Onde**: `vector_store.py:_classify_query_weights()` (função `_is_meaningful` + `_CAPS_PREFIX` em módulo)
+
+## 2026-03-26 — Indexação automática via hooks do Claude Code
+
+30. **SessionStart + PreCompact é a combinação correta para indexação automática**
+    - `SessionEnd` parece óbvio mas é imprevisível: sessões podem fechar abruptamente sem disparar o hook
+    - `SessionStart` é garantido: toda vez que o Claude Code abre, o índice é atualizado
+    - `PreCompact` resolve o único gap real: conteúdo da sessão atual fica disponível via `/recall` mesmo após compactação
+    - Sem `PreCompact`, conteúdo compactado só seria indexado no próximo `SessionStart` (próxima sessão)
+    - Os dois hooks juntos eliminam a necessidade de indexação manual no dia a dia
+    - **Onde**: `~/.claude/settings.json` (hooks SessionStart e PreCompact)
+
+31. **Total Recall lê JSONL em disco, não o contexto ativo do Claude**
+    - Compactação de contexto não apaga dados: os arquivos JSONL em `~/.claude/projects/` continuam crescendo
+    - O que se perde na compactação é apenas a memória de trabalho do Claude, não o conteúdo em disco
+    - Portanto, não há urgência em indexar ANTES da compactação para preservar dados
+    - A urgência do `PreCompact` é outra: tornar o conteúdo pesquisável via `/recall` ainda naquela sessão
