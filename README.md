@@ -153,17 +153,22 @@ chmod +x ~/.local/bin/total-recall
 # Busca semântica + keyword
 total-recall search "como decidimos sobre pgvector"
 
-# Formato para injeção direta no Claude Code
-total-recall search "arquitetura memoria viva" --format context --limit 8
+# Mais resultados
+total-recall search "arquitetura memoria viva" --format context -n 10
 
 # Filtrar por sessão específica (prefixo do UUID)
 total-recall search "renomear pasta" --session 9739fab2
 
+# Salvar resultados como clipping Markdown
+total-recall search "lancedb decisão" --format context --output -auto-
+# → ~/.total-recall/clips/2026-03-25_lancedb-decisao.md
+
+# Exportar sessão completa para Markdown
+total-recall export 31c6d284
+# → ~/.total-recall/exports/31c6d284.md
+
 # Listar sessões indexadas
 total-recall sessions
-
-# Exportar sessão para Markdown
-total-recall export 31c6d284
 
 # Estado do sistema
 total-recall status
@@ -176,10 +181,18 @@ total-recall index --full
 
 Após `total-recall init`, a skill fica disponível em qualquer sessão:
 
+| Comando | O que faz |
+|---|---|
+| `/recall <query>` | Busca e apresenta resultados no contexto (padrão: 8 resultados) |
+| `/recall <query> --clip` | Busca + salva clipping em `~/.total-recall/clips/` |
+| `/recall <query> --limit 15` | Mais resultados |
+| `/recall <query> --session abc123` | Filtra por sessão específica |
+| `/recall <query> --session abc123 --clip` | Filtra + salva clipping |
+
 ```
 /recall o que decidimos sobre a arquitetura de memória?
-/recall em qual sessão configuramos o git remote?
-/recall qual foi o diagnóstico do bug de session_id?
+/recall lancedb lancedb --clip
+/recall banco vetorial decisão --session c3b0e47e --limit 15
 ```
 
 O Claude executa `total-recall search` com a query, recebe os trechos mais relevantes em formato estruturado, e responde com base nas sessões recuperadas — com citação de sessão, data e contexto.

@@ -254,15 +254,19 @@ total-recall index --full --subagents
 ### `total-recall search`
 
 ```bash
-total-recall search "query"                     # Busca padrão (5 resultados)
-total-recall search "query" -n 10               # Mais resultados
-total-recall search "query" --session 9739fab2  # Filtrar por sessão (prefixo aceito)
-total-recall search "query" --format context    # Para injeção no Claude
-total-recall search "query" --format json       # Para processamento
-total-recall search "query" --format rich       # Visual (padrão)
+total-recall search "query"                              # Busca padrão (5 resultados)
+total-recall search "query" -n 10                        # Mais resultados
+total-recall search "query" --session 9739fab2           # Filtrar por sessão (prefixo aceito)
+total-recall search "query" --format context             # Para injeção no Claude
+total-recall search "query" --format json                # Para processamento
+total-recall search "query" --format rich                # Visual (padrão)
+total-recall search "query" --format context --output -auto-        # Salva clipping automático
+total-recall search "query" --format context --output meu-clip.md  # Salva com nome manual
 ```
 
 O formato `context` é o mais útil dentro do Claude Code — produz um bloco Markdown estruturado pronto para ser interpretado pelo modelo.
+
+Os clippings são salvos em `~/.total-recall/clips/` com cabeçalho de data/hora.
 
 ### `total-recall sessions`
 
@@ -307,7 +311,7 @@ Total Recall — Status
 total-recall init
 ```
 
-Só precisa rodar uma vez (ou depois de reinstalar). Cria o banco de dados, os diretórios, e instala a skill `/recall` em `~/.claude/commands/recall.md`.
+Só precisa rodar uma vez (ou depois de reinstalar). Cria o banco de dados, os diretórios, e instala a skill `/recall` em `~/.claude/skills/recall/SKILL.md`.
 
 ---
 
@@ -315,18 +319,46 @@ Só precisa rodar uma vez (ou depois de reinstalar). Cria o banco de dados, os d
 
 Este é o uso mais poderoso do sistema. Em vez de sair para o terminal, você acessa a memória de dentro da conversa.
 
-### Como acionar
+### Tabela comparativa: `/recall` vs `total-recall search`
+
+| | `/recall` (skill, dentro do Claude) | `total-recall search` (CLI, terminal) |
+|---|---|---|
+| **Onde roda** | Dentro da sessão ativa do Claude Code | Terminal, fora do Claude |
+| **Quem interpreta** | Claude analisa e sintetiza os resultados | Você lê os resultados diretamente |
+| **Saída padrão** | Markdown renderizado com análise | Terminal colorido (rich) ou texto |
+| **Highlighting** | **`negrito+código`** nos termos | ANSI amarelo no terminal |
+| **Filtro por sessão** | `/recall query --session abc123` | `--session abc123` |
+| **Mais resultados** | `/recall query --limit 12` | `-n 12` |
+| **Salvar clipping** | `/recall query --clip` | `--output -auto-` |
+| **Aprofundar sessão** | `/recall query --session abc123 --limit 15` | `--session abc123 -n 15` |
+| **Exportar sessão** | não disponível | `total-recall export <session-id>` |
+| **Formato JSON** | não disponível | `--format json` |
+
+### Flags disponíveis no /recall
 
 ```
-/recall o que decidimos sobre a arquitetura de memória?
-/recall em qual sessão configuramos o git remote?
-/recall qual foi o bug do session_id que encontramos?
-/recall como funciona o temporal decay no total-recall?
+/recall <query>                          # busca padrão (8 resultados)
+/recall <query> --clip                   # salva resultados como clipping Markdown
+/recall <query> --limit 12               # mais resultados
+/recall <query> --session abc123         # filtra por sessão (prefixo aceito)
+/recall <query> --session abc123 --clip  # filtrado + salvo
 ```
 
-### O que acontece
+**Exemplos reais:**
 
-A skill executa `total-recall search "<sua query>" --format context --limit 8` e injeta os resultados no contexto da conversa. O Claude recebe os trechos estruturados com sessão, data e conteúdo, e responde com base neles.
+```
+/recall lancedb lancedb                            # variações do mesmo termo
+/recall banco vetorial decisão --clip              # pesquisa + salva clipping
+/recall Milvus --session c3b0e47e --limit 15       # aprofunda numa sessão específica
+/recall o que decidimos sobre a arquitetura?       # query descritiva funciona bem
+/recall sqlite WAL backup --clip                   # referência técnica salva para depois
+```
+
+Os clippings ficam em `~/.total-recall/clips/` com nome gerado automaticamente (`2026-03-25_banco-vetorial-decisao.md`).
+
+### O que acontece quando você usa /recall
+
+A skill detecta as flags, executa `total-recall search "<query limpa>" --format context [--output -auto-]` e injeta os resultados no contexto da conversa. O Claude recebe os trechos estruturados com sessão, data e conteúdo, e responde com base neles.
 
 ### Quando usar /recall
 
@@ -334,6 +366,7 @@ A skill executa `total-recall search "<sua query>" --format context --limit 8` e
 - Ao iniciar trabalho em um projeto com histórico — `/recall contexto do projeto X`
 - Quando quiser citar a decisão correta, não a que você lembra — `/recall por que não usamos pgvector`
 - Para recuperar código ou configuração que foi discutida — `/recall como configuramos o WAL no SQLite`
+- Para criar uma referência consultável depois — `/recall tema importante --clip`
 
 ### Limitação importante
 
