@@ -72,10 +72,20 @@ class Indexer:
         for discovered in files:
             try:
                 if discovered.status == "changed":
-                    # Append-only: pula chunks já indexados, insere apenas novos
+                    # Append-only: arquivo cresceu — insere apenas chunks novos
                     skip_until = self._get_last_chunk_index(discovered)
                     chunks_count = self._index_single_file(discovered, skip_until=skip_until)
                     label = f"+{chunks_count} novos" if skip_until >= 0 else f"{chunks_count} chunks"
+                elif discovered.status == "changed_nonmonotonic":
+                    # Arquivo encolheu ou foi modificado no meio — reindexação completa da sessão
+                    self._delete_session_data(discovered)
+                    chunks_count = self._index_single_file(discovered)
+                    label = f"{chunks_count} chunks (reindexado)"
+                    print(
+                        f"  AVISO: {discovered.path.name} encolheu ou foi modificado — "
+                        f"reindexação completa da sessão",
+                        file=sys.stderr,
+                    )
                 else:
                     chunks_count = self._index_single_file(discovered)
                     label = f"{chunks_count} chunks"

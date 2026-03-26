@@ -229,3 +229,71 @@
     - O que se perde na compactação é apenas a memória de trabalho do Claude, não o conteúdo em disco
     - Portanto, não há urgência em indexar ANTES da compactação para preservar dados
     - A urgência do `PreCompact` é outra: tornar o conteúdo pesquisável via `/recall` ainda naquela sessão
+
+## 2026-03-26 — Revisão de arquitetura (relatório consolidado → V04)
+
+32. **Append-only tem uma segunda camada de risco: mudança de parser sem reindexação**
+    - O hash SHA-256 do JSONL não muda quando o parser é atualizado
+    - O banco pode ter metade dos chunks indexados com a política antiga sem nenhum sinal visível
+    - Fix: persistir hash de "versão do parser" em `indexing_runs`; discrepância deve sinalizar índice potencialmente stale
+    - **Onde**: `indexer.py`, `database.py` (schema de `indexing_runs`)
+
+33. **A degradação silenciosa para FTS5-only tem uma camada invisível: a skill não sabe**
+    - Quando em modo degradado, o contexto injetado no Claude via `/recall` não carrega nenhum marcador de qualidade
+    - A resposta gerada tem a mesma aparência de confiança de quando os embeddings estão ativos
+    - Isso é calibração de confiança errada, não só ausência de observabilidade operacional
+    - Fix: `doctor` command + marcador de modo na saída da skill
+
+34. **O provider OpenAI tem dois problemas independentes: dimensão e instrução**
+    - Dimensional (já documentado): banco cria chunks_vec com 1024 dims, OpenAI retorna 1536
+    - Instrução (novo): OllamaEmbedProvider usa instruction-aware embedding; OpenAIEmbedProvider não passa instruções à API
+    - text-embedding-3-small suporta instruções, mas o código não as usa — embeddings OpenAI são estruturalmente piores para retrieval, não por capacidade do modelo, mas por uso incorreto
+    - **Onde**: `embeddings.py:OpenAIEmbedProvider`
+
+35. **MMR usa Jaccard em vez de embeddings — a ferramenta errada para o problema certo**
+    - Jaccard: "esses textos compartilham palavras"; cosine embedding: "esses textos expressam ideias próximas"
+    - Pares semanticamente redundantes com vocabulário diferente passam pelo MMR; pares complementares com vocabulário similar são descartados
+    - Os embeddings já estão no banco — custo de corrigir é baixo
+    - **Onde**: `recall_engine.py` (cálculo de similaridade no MMR)
+
+36. **Classificação adaptativa tem caso cego: queries mistas (stop words + termos técnicos)**
+    - "Por que o PLN falhou com BERTimbau?" tem stop words semânticas E termos técnicos
+    - Waterfall binária classifica como semântica (70/30) quando a intenção é técnica
+    - Fix: interpolar pesos proporcionalmente quando os dois sinais coexistem
+    - **Onde**: `vector_store.py:_classify_query_weights()`
+
+37. **Threshold fuzzy absoluto (doc_count ≤ 10) degrada com crescimento do corpus**
+    - Termos raros genuínos ficam acima do threshold e param de ser expandidos
+    - Typos frequentes também ficam acima e param de ser corrigidos
+    - Fix: usar frequência relativa (ex: < 0.1% do vocabulário total)
+    - **Onde**: `vector_store.py:_build_fts_query()`
+
+38. **Tentativas fracassadas e rejeições são sistematicamente ignoradas pela indexação**
+    - Marcadores atuais capturam conclusões ("decidimos", "root cause") mas não rejeições
+    - "Tentei X mas não funcionou", "descartamos A porque B", "o problema não era Z" — memória diagnóstica de alta densidade
+    - Grande parte do conhecimento técnico reside em "o que não funciona e por quê"
+    - Fix: adicionar marcadores de rejeição ao critério de seleção de blocos internos
+    - **Onde**: `session_parser.py` (lista de markers para thinking/tool_result)
+
+39. **Timestamp de chunk é o timestamp de sessão, não de mensagem**
+    - Sessões longas (horas) têm todos os chunks com o mesmo timestamp
+    - Temporal decay incorreto; mudanças de posição dentro da sessão são invisíveis
+    - JSONL tem `createdAt` por mensagem — extração de timestamp por chunk é de custo baixo
+    - **Onde**: `session_parser.py`, `models.py:Chunk`
+
+40. **Overlap de chunking cria artefatos de scoring no FTS5 que reduzem o pool efetivo do MMR**
+    - Termo na zona de overlap aparece em dois chunks adjacentes; ambos recebem match FTS5
+    - Pool de 3x fica parcialmente ocupado por duplicatas antes de chegar ao MMR
+    - Fix: deduplicação por chunk_id antes do MMR; considerar aumentar pool para 4x
+    - **Onde**: `recall_engine.py`
+
+41. **Clippings não são indexados — memória curada que não pode ser pesquisada**
+    - `~/.total-recall/clips/` contém conteúdo selecionado pelo usuário, mas está fora do índice
+    - Assimetria: a versão mais curada da memória é a menos recuperável
+    - Fix: indexar clips como fonte de primeira classe com role weight diferente
+
+42. **CONTEXT_BUDGET ignorado pode disparar a compactação que pretendia prevenir**
+    - Em sessões longas, dump completo do /recall pode empurrar a sessão para o limiar de compactação
+    - PreCompact dispara, indexa, mas o conteúdo entregue pela skill já foi compactado
+    - Fix: aplicar CONTEXT_BUDGET real na skill com truncamento por score
+    - **Onde**: `config.py:CONTEXT_BUDGET`, `recall_engine.py`, `skill/recall.md`
