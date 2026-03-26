@@ -195,3 +195,21 @@
     - O CLI não tem esse buffer — exibia resultados com aparência de real, confundindo o usuário
     - Lição: sistemas com LLM na cadeia de interpretação toleram mais ruído na recuperação
     - Lição inversa: não confiar nessa tolerância como substituto de qualidade na recuperação
+
+## 2026-03-26 — V03: Ponderação adaptativa de query
+
+28. **Ponderação 70/30 é errada para queries técnicas — o classificador resolve isso dinamicamente**
+    - Implementação de `_classify_query_weights()` que detecta o tipo de query antes de buscar
+    - Três etapas: (1) stop words semânticas → híbrido; (2) query curta (≤2 tokens) → FTS5-dominante; (3) todos tokens técnicos → FTS5-dominante
+    - Pesos adaptativos: `fts5_dominant` = 25% vetor / 75% FTS5 (configurável via env vars)
+    - `search_mode` exposto em `--format json` para diagnóstico
+    - Casos de uso: netnografia, MLEGCN, BERTimbau, PLN, NER — todos classificados corretamente como fts5_dominant
+    - **Onde**: `vector_store.py:_classify_query_weights()`, `config.py` (ADAPTIVE_VECTOR_WEIGHT_SPECIFIC)
+
+29. **V03.1: Acrônimos curtos ALL-CAPS (3 chars) eram invisíveis para o classificador**
+    - `FUZZY_MIN_TOKEN_LENGTH = 4` filtrava PLN, NER, SQL, API, GPU — tokens de 3 letras nunca chegavam ao classificador como "significativos"
+    - Fix: função `_is_meaningful()` que adiciona exceção para tokens ALL-CAPS de 2-3 letras
+    - Extensão: padrão `_CAPS_PREFIX = re.compile(r'^[A-Z]{2,}')` captura nomes técnicos CamelCase (BERTimbau, GPT4, SQLite) na etapa 2b
+    - 15/15 casos de teste passam: PLN, NER, NLP, SQL, API, GPU, PLN+NER+BERTimbau, MLEGCN e regressões
+    - Regra geral: qualquer token que começa com 2+ maiúsculas é tratado como termo técnico, não como palavra comum
+    - **Onde**: `vector_store.py:_classify_query_weights()` (função `_is_meaningful` + `_CAPS_PREFIX` em módulo)
