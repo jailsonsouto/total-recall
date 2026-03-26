@@ -71,17 +71,21 @@ class Indexer:
         import sys
         for discovered in files:
             try:
-                # Se é "changed", limpa dados antigos
                 if discovered.status == "changed":
-                    self._delete_session_data(discovered)
+                    # Append-only: pula chunks já indexados, insere apenas novos
+                    skip_until = self._get_last_chunk_index(discovered)
+                    chunks_count = self._index_single_file(discovered, skip_until=skip_until)
+                    label = f"+{chunks_count} novos" if skip_until >= 0 else f"{chunks_count} chunks"
+                else:
+                    chunks_count = self._index_single_file(discovered)
+                    label = f"{chunks_count} chunks"
 
-                chunks_count = self._index_single_file(discovered)
                 report["files_indexed"] += 1
                 report["chunks_created"] += chunks_count
 
                 print(
                     f"  Indexado: {discovered.path.name} "
-                    f"({chunks_count} chunks)",
+                    f"({label})",
                     file=sys.stderr,
                 )
 
@@ -104,8 +108,14 @@ class Indexer:
 
         return report
 
-    def _index_single_file(self, discovered: DiscoveredFile) -> int:
-        """Parseia e indexa um arquivo JSONL. Retorna contagem de chunks."""
+    def _index_single_file(self, discovered: DiscoveredFile,
+                           skip_until: int = -1) -> int:
+        """Parseia e indexa um arquivo JSONL.
+
+        skip_until: pula chunks com chunk_index <= skip_until
+        (modo append-only para sessões que apenas cresceram).
+        Retorna contagem de chunks NOVOS inseridos.
+        """
         parser = SessionParser(discovered.path)
         session_info, chunks = parser.parse()
 
@@ -113,7 +123,7 @@ class Indexer:
         has_embedding = self.embed is not None
 
         with self.db.transaction() as conn:
-            # Insere session
+            # Atualiza metadados da sessão (INSERT OR REPLACE)
             conn.execute(
                 "INSERT OR REPLACE INTO sessions "
                 "(session_id, project_path, project_label, title, "
@@ -132,9 +142,11 @@ class Indexer:
                  datetime.now().isoformat()],
             )
 
-            # Insere chunks
+            # Insere apenas chunks novos (skip_until > -1 = modo append)
             count = 0
             for chunk in chunks:
+                if chunk.chunk_index <= skip_until:
+                    continue
                 self.vector_store.add(
                     session_id=session_info.session_id,
                     role=chunk.role,
@@ -151,6 +163,21 @@ class Indexer:
                 count += 1
 
             return count
+
+    def _get_last_chunk_index(self, discovered: DiscoveredFile) -> int:
+        """Retorna o maior chunk_index da sessão, ou -1 se não existe."""
+        with self.db.connection() as conn:
+            row = conn.execute(
+                "SELECT session_id FROM sessions WHERE file_path = ?",
+                [str(discovered.path)],
+            ).fetchone()
+            if not row:
+                return -1
+            result = conn.execute(
+                "SELECT MAX(chunk_index) FROM chunks WHERE session_id = ?",
+                [row[0]],
+            ).fetchone()
+            return result[0] if result[0] is not None else -1
 
     def _delete_session_data(self, discovered: DiscoveredFile):
         """Remove dados de uma sessão para reindexação."""

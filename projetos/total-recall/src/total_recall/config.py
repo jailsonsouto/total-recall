@@ -65,6 +65,33 @@ TEXT_WEIGHT = 0.3
 # Budget de tokens no output do /recall
 CONTEXT_BUDGET = 6000
 
+# Score mínimo para resultados recuperados APENAS por vetor (sem match FTS5).
+# Quando FTS5 não encontra o termo (não está no corpus), a busca vetorial devolve
+# os N "menos distantes" mesmo que a distância de cosseno seja altíssima (~0.7+).
+# Abaixo deste piso, o sistema prefere retornar zero resultados a retornar ruído.
+# Resultados com contribuição FTS5 passam incondicionalmente — indicam match real.
+# Configurável: TOTAL_RECALL_MIN_SCORE (padrão 0.42)
+MIN_VECTOR_ONLY_SCORE = float(os.getenv("TOTAL_RECALL_MIN_SCORE", "0.42"))
+
+# V03 — Pesos adaptativos para queries específicas/técnicas.
+# Quando a query é composta por termos raros ou acrônimos (sem contexto semântico),
+# o FTS5 é o sinal primário — o vetor é rebaixado para evitar ruído dominante.
+ADAPTIVE_VECTOR_WEIGHT_SPECIFIC = float(os.getenv("TOTAL_RECALL_ADAPTIVE_VECTOR_WEIGHT", "0.25"))
+ADAPTIVE_TEXT_WEIGHT_SPECIFIC   = float(os.getenv("TOTAL_RECALL_ADAPTIVE_TEXT_WEIGHT",  "0.75"))
+
+# ══════════════════════════════════════════════════════════════
+# FUZZY MATCHING (V02)
+# ══════════════════════════════════════════════════════════════
+
+# Similaridade mínima para expansão fuzzy (0.0–1.0)
+FUZZY_THRESHOLD = float(os.getenv("TOTAL_RECALL_FUZZY_THRESHOLD", "0.70"))
+
+# Máximo de variantes por token
+FUZZY_MAX_EXPANSIONS = int(os.getenv("TOTAL_RECALL_FUZZY_MAX_EXPANSIONS", "5"))
+
+# Tokens menores que isso não passam por fuzzy (evita falsos positivos)
+FUZZY_MIN_TOKEN_LENGTH = int(os.getenv("TOTAL_RECALL_FUZZY_MIN_TOKEN_LENGTH", "4"))
+
 # ══════════════════════════════════════════════════════════════
 # TEMPORAL DECAY
 # ══════════════════════════════════════════════════════════════

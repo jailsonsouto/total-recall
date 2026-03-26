@@ -14,6 +14,7 @@
 6. [Usando dentro do Claude Code — skill /recall](#6-usando-dentro-do-claude-code--skill-recall)
 7. [Rotina recomendada](#7-rotina-recomendada)
 8. [Perguntas frequentes](#8-perguntas-frequentes)
+9. [Limites do sistema — quando "nenhum resultado" é a resposta correta](#9-limites-do-sistema--quando-nenhum-resultado-é-a-resposta-correta)
 
 ---
 
@@ -166,42 +167,62 @@ O re-ranking por Maximal Marginal Relevance garante que os 5 resultados não sej
 
 ## 4. Erros de digitação e variações
 
-Esta é uma pergunta importante, então a resposta é direta e honesta.
+A partir da V02, o Total Recall tem três camadas de tolerância léxica que
+corrigem automaticamente erros comuns de digitação. Você não precisa fazer
+nada — a correção acontece na hora da busca.
 
-### O motor vetorial tolera, o FTS5 não
+### O que é corrigido automaticamente
 
-Se você digitar **"novax"** em vez de **"novex"**:
-
-- **FTS5** não vai encontrar. O índice de texto completo é literal — procura os tokens exatos. "novax" ≠ "novex".
-- **Motor vetorial** *pode* encontrar, dependendo de quanto a diferença altera o significado semântico do contexto. Para nomes próprios e identificadores curtos, a diferença tende a ser pequena demais para o vetor compensar.
-
-Na prática: **uma letra diferente num nome específico** tende a falhar. Não há correção ortográfica embutida.
-
-### Como contornar
-
-**Use palavras do contexto, não o termo exato:**
+**Separadores técnicos** — hífens e underscores são tratados como espaços:
 
 ```bash
-# Frágil — depende do nome correto
-total-recall search "pasta novex"
+total-recall search "total recall"    # encontra "total-recall"
+total-recall search "session id"      # encontra "session_id"
+total-recall search "sqlite vec"      # encontra "sqlite-vec"
+```
 
-# Robusto — descreve o que aconteceu
+**Abreviações PT-BR** — 38 abreviações informais são expandidas:
+
+```bash
+total-recall search "vc decidiu"      # encontra "você decidiu"
+total-recall search "pq escolhemos"   # encontra "porque escolhemos"
+total-recall search "tbm quero"       # encontra "também quero"
+```
+
+Lista parcial: `vc→você`, `pq→porque`, `tbm→também`, `hj→hoje`, `mt→muito`,
+`nao→não`, `blz→beleza`, `vlw→valeu`, `repo→repositório`, `db→database`, `msg→mensagem`.
+
+**Erros de digitação** (via rapidfuzz) — para palavras com 4+ caracteres,
+o sistema busca variantes similares no vocabulário indexado:
+
+```bash
+total-recall search "sqilte"          # encontra "sqlite"
+total-recall search "chromdb"         # encontra "chromadb"
+total-recall search "embeding"        # encontra "embedding"
+```
+
+O threshold de similaridade é 85% — erros de 1-2 caracteres em palavras
+com 5+ letras são corrigidos. Palavras curtas (≤ 3 chars) não passam pelo
+fuzzy para evitar falsos positivos.
+
+### O que NÃO é corrigido
+
+- **Palavras completamente diferentes**: `busca` não encontra `pesquisa` via FTS5
+  (o motor vetorial pode cobrir isso semanticamente)
+- **Abreviações não cadastradas**: apenas as 38 da tabela interna são expandidas
+- **UUIDs e session IDs**: nunca são expandidos por fuzzy
+
+### Dica: queries descritivas continuam sendo mais robustas
+
+Mesmo com a tolerância léxica, uma query descritiva sempre funciona melhor
+que um termo isolado:
+
+```bash
+# Bom — encontra pelo contexto
 total-recall search "renomear pasta agente de memória"
-total-recall search "pasta projeto renomeada para memoria-viva"
-```
 
-**Use termos que certamente estão na conversa:**
-
-```bash
-# Se você sabe que a decisão foi sobre organização de pastas
-total-recall search "estrutura de diretórios do projeto"
-```
-
-**Tente variações:**
-
-```bash
-total-recall search "novex"
-total-recall search "novax"   # só para comparar
+# Também funciona agora — corrige o typo
+total-recall search "sqilte vec configuração"
 ```
 
 ### Queries em inglês encontram conteúdo em português (e vice-versa)
@@ -234,15 +255,19 @@ total-recall index --full --subagents
 ### `total-recall search`
 
 ```bash
-total-recall search "query"                     # Busca padrão (5 resultados)
-total-recall search "query" -n 10               # Mais resultados
-total-recall search "query" --session 9739fab2  # Filtrar por sessão (prefixo aceito)
-total-recall search "query" --format context    # Para injeção no Claude
-total-recall search "query" --format json       # Para processamento
-total-recall search "query" --format rich       # Visual (padrão)
+total-recall search "query"                              # Busca padrão (5 resultados)
+total-recall search "query" -n 10                        # Mais resultados
+total-recall search "query" --session 9739fab2           # Filtrar por sessão (prefixo aceito)
+total-recall search "query" --format context             # Para injeção no Claude
+total-recall search "query" --format json                # Para processamento
+total-recall search "query" --format rich                # Visual (padrão)
+total-recall search "query" --format context --output -auto-        # Salva clipping automático
+total-recall search "query" --format context --output meu-clip.md  # Salva com nome manual
 ```
 
 O formato `context` é o mais útil dentro do Claude Code — produz um bloco Markdown estruturado pronto para ser interpretado pelo modelo.
+
+Os clippings são salvos em `~/.total-recall/clips/` com cabeçalho de data/hora.
 
 ### `total-recall sessions`
 
@@ -287,7 +312,7 @@ Total Recall — Status
 total-recall init
 ```
 
-Só precisa rodar uma vez (ou depois de reinstalar). Cria o banco de dados, os diretórios, e instala a skill `/recall` em `~/.claude/commands/recall.md`.
+Só precisa rodar uma vez (ou depois de reinstalar). Cria o banco de dados, os diretórios, e instala a skill `/recall` em `~/.claude/skills/recall/SKILL.md`.
 
 ---
 
@@ -295,18 +320,46 @@ Só precisa rodar uma vez (ou depois de reinstalar). Cria o banco de dados, os d
 
 Este é o uso mais poderoso do sistema. Em vez de sair para o terminal, você acessa a memória de dentro da conversa.
 
-### Como acionar
+### Tabela comparativa: `/recall` vs `total-recall search`
+
+| | `/recall` (skill, dentro do Claude) | `total-recall search` (CLI, terminal) |
+|---|---|---|
+| **Onde roda** | Dentro da sessão ativa do Claude Code | Terminal, fora do Claude |
+| **Quem interpreta** | Claude analisa e sintetiza os resultados | Você lê os resultados diretamente |
+| **Saída padrão** | Markdown renderizado com análise | Terminal colorido (rich) ou texto |
+| **Highlighting** | **`negrito+código`** nos termos | ANSI amarelo no terminal |
+| **Filtro por sessão** | `/recall query --session abc123` | `--session abc123` |
+| **Mais resultados** | `/recall query --limit 12` | `-n 12` |
+| **Salvar clipping** | `/recall query --clip` | `--output -auto-` |
+| **Aprofundar sessão** | `/recall query --session abc123 --limit 15` | `--session abc123 -n 15` |
+| **Exportar sessão** | não disponível | `total-recall export <session-id>` |
+| **Formato JSON** | não disponível | `--format json` |
+
+### Flags disponíveis no /recall
 
 ```
-/recall o que decidimos sobre a arquitetura de memória?
-/recall em qual sessão configuramos o git remote?
-/recall qual foi o bug do session_id que encontramos?
-/recall como funciona o temporal decay no total-recall?
+/recall <query>                          # busca padrão (8 resultados)
+/recall <query> --clip                   # salva resultados como clipping Markdown
+/recall <query> --limit 12               # mais resultados
+/recall <query> --session abc123         # filtra por sessão (prefixo aceito)
+/recall <query> --session abc123 --clip  # filtrado + salvo
 ```
 
-### O que acontece
+**Exemplos reais:**
 
-A skill executa `total-recall search "<sua query>" --format context --limit 8` e injeta os resultados no contexto da conversa. O Claude recebe os trechos estruturados com sessão, data e conteúdo, e responde com base neles.
+```
+/recall lancedb lancedb                            # variações do mesmo termo
+/recall banco vetorial decisão --clip              # pesquisa + salva clipping
+/recall Milvus --session c3b0e47e --limit 15       # aprofunda numa sessão específica
+/recall o que decidimos sobre a arquitetura?       # query descritiva funciona bem
+/recall sqlite WAL backup --clip                   # referência técnica salva para depois
+```
+
+Os clippings ficam em `~/.total-recall/clips/` com nome gerado automaticamente (`2026-03-25_banco-vetorial-decisao.md`).
+
+### O que acontece quando você usa /recall
+
+A skill detecta as flags, executa `total-recall search "<query limpa>" --format context [--output -auto-]` e injeta os resultados no contexto da conversa. O Claude recebe os trechos estruturados com sessão, data e conteúdo, e responde com base neles.
 
 ### Quando usar /recall
 
@@ -314,6 +367,7 @@ A skill executa `total-recall search "<sua query>" --format context --limit 8` e
 - Ao iniciar trabalho em um projeto com histórico — `/recall contexto do projeto X`
 - Quando quiser citar a decisão correta, não a que você lembra — `/recall por que não usamos pgvector`
 - Para recuperar código ou configuração que foi discutida — `/recall como configuramos o WAL no SQLite`
+- Para criar uma referência consultável depois — `/recall tema importante --clip`
 
 ### Limitação importante
 
@@ -392,6 +446,129 @@ Não diretamente, mas você pode apontar o `TOTAL_RECALL_SESSIONS` para outro di
 ```bash
 TOTAL_RECALL_SESSIONS=/caminho/para/backup/.claude/projects total-recall index
 ```
+
+---
+
+---
+
+## 9. Limites do sistema — quando "nenhum resultado" é a resposta correta
+
+Esta seção explica o comportamento do sistema quando você busca por algo que **não está nas sessões indexadas** — e por que retornar zero resultados é mais honesto do que retornar resultados inventados.
+
+### O problema: a busca vetorial sempre encontra algo
+
+O motor vetorial converte sua query em um ponto num espaço de 1024 dimensões e busca os N pontos mais próximos no banco. O problema: ele **sempre responde**, independente de quão longe os vizinhos estejam. É como pedir ao GPS o restaurante mais próximo estando no meio do deserto — ele te dá uma resposta, mas não é útil.
+
+Quando você busca um termo que nunca apareceu nas suas sessões, o sistema não encontra nada via FTS5 (busca por palavras-chave), e o motor vetorial devolve os "menos distantes" do espaço — que podem ser completamente irrelevantes. O resultado parece real: tem score, tem sessão, tem conteúdo. Mas é ruído.
+
+**Exemplo real:** busca por `"netnografia"` (metodologia de pesquisa online) num banco que só contém conversas sobre Claude Code:
+
+```
+[1] ▓▓▓▓░░░░░░ 0.41 | AGENTES/CLAUDE — Sessão 4b8c4f15  ← ruído
+    "O transcript daquela sessão está linkado no próprio sistema..."
+
+[2] ▓▓▓░░░░░░░ 0.39 | AGENTES/CLAUDE — Sessão 4b8c4f15  ← ruído
+    "Agora vou testar:"
+```
+
+Nenhum desses resultados tem qualquer relação com netnografia. O sistema estava devolvendo os chunks que habitam a região do espaço vetorial "menos longe" de "netnografia" — conceitos de rede/internet e documentação acadêmica, que vagamente se sobrepõem com sessões remotas e transcripts de conversas.
+
+### Por que o espaço vetorial cria essa ilusão
+
+Para visualizar, imagine uma versão 2D simplificada do espaço de 1024 dimensões:
+
+```
+                    ↑
+                    │  [chunk: "sessão remota"]       × ← netnografia
+                    │                       ·
+                    │      [chunk: "GitHub link"]
+                    │  [chunk: "transcript"]
+                    │
+   Claude Code ─────┼──────────────────────────────────→
+   conversas        │
+                    │
+                    │
+                         ← etnografia/pesquisa (espaço vazio)
+```
+
+O banco só contém pontos na região "Claude Code". "Netnografia" aterrissa num ponto vazio, na fronteira de conceitos de rede/pesquisa. O motor vetorial não sabe que aquela região é vazia — ele simplesmente retorna os 5 pontos menos distantes disponíveis.
+
+A matemática explica o score baixo:
+
+```
+score = VECTOR_WEIGHT × (1 / (1 + distância_cosseno))
+      = 0.7 × (1 / (1 + d))
+
+Para score 0.41:
+  d = 0.706  →  similaridade de cosseno = 0.294
+
+Escala de referência:
+  1.00 → mesmo texto
+  0.85 → paráfrase próxima
+  0.65 → mesmo tópico
+  0.50 → tópicos relacionados
+  0.29 → sem relação prática  ← netnografia
+  0.00 → vetores ortogonais (aleatório)
+```
+
+Score 0.29 de similaridade de cosseno significa que o vetor de "netnografia" e o vetor do chunk retornado apontam quase em direções opostas no espaço — não há relação real.
+
+### A solução: piso de confiança para resultados vector-only
+
+O sistema aplica um filtro seletivo: **resultados recuperados exclusivamente pelo motor vetorial** (sem nenhum match por FTS5) são descartados se o score estiver abaixo de 0.42.
+
+Resultados com contribuição FTS5 passam incondicionalmente — se o FTS5 encontrou o termo, ele literalmente existe no corpus. O filtro atua apenas no ruído vetorial puro.
+
+```
+Por que apenas vector-only?
+
+Score máximo possível de um resultado puro FTS5:
+  TEXT_WEIGHT × 1.0 = 0.3 × 1.0 = 0.30
+
+Um threshold de 0.42 acima de 0.30 filtraria TODOS os resultados FTS5.
+Por isso o filtro é aplicado seletivamente: só a resultados sem FTS5.
+```
+
+Com o piso configurado:
+
+```
+Busca por "netnografia" (não está no corpus):
+  FTS5: 0 resultados
+  Vetorial: 5 resultados, todos com score < 0.42
+  → Todos filtrados → "Nenhum resultado encontrado" ✓
+
+Busca por "arquitetura de memória" (está no corpus):
+  FTS5: encontra matches literais → passa incondicionalmente
+  Vetorial: scores 0.47–0.53 → acima do piso → passa ✓
+  → Resultados genuínos retornados ✓
+```
+
+Você pode ajustar o piso via variável de ambiente se necessário:
+
+```bash
+TOTAL_RECALL_MIN_SCORE=0.50 total-recall search "query"  # mais restrito
+TOTAL_RECALL_MIN_SCORE=0.35 total-recall search "query"  # mais permissivo
+```
+
+### `/recall` vs terminal: a diferença de comportamento
+
+Antes do piso de confiança existir, havia uma diferença importante entre os dois modos de uso:
+
+| | `/recall` (dentro do Claude) | `total-recall search` (terminal) |
+|---|---|---|
+| **Quem interpreta** | Claude lê e filtra os resultados | Você lê diretamente |
+| **Comportamento com ruído** | Claude detecta que os resultados não têm relação com a query e responde "não encontrado" | Exibe os resultados — parece real, mas é ruído |
+| **Honestidade** | Alta — Claude age como filtro inteligente | Dependia do usuário perceber os scores baixos |
+
+O `/recall` já funcionava corretamente mesmo sem o piso — o Claude, ao receber os chunks, percebia que nenhum mencionava o termo buscado e informava o usuário. O filtro de score mínimo corrige o comportamento do CLI para que seja igualmente honesto, sem depender de interpretação humana.
+
+### O que o sistema não pode recuperar
+
+O piso de confiança é a mitigação certa para "termo ausente do corpus". Mas há outros limites que nenhuma configuração resolve:
+
+- **Conceitos nunca discutidos**: se você nunca mencionou "netnografia" em nenhuma sessão, não há nada a recuperar. O sistema é memória — não inventa.
+- **Sessões não indexadas**: conteúdo de sessões que não passaram pelo `total-recall index` é invisível.
+- **Paráfrases sem sobreposição vetorial**: em casos raros, uma ideia pode ter sido expressa de forma tão diferente da query que nem o vetor consegue conectar. Nesses casos, tente reformular a query com outros termos.
 
 ---
 

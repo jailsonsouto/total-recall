@@ -90,3 +90,126 @@
     - `CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(...)` não altera dimensão se tabela já existe
     - No full reindex, é obrigatório dropar e recriar com a nova dimensão
     - **Onde**: `database.py:164-170` (recreate_vec_table), `indexer.py:58-62`
+
+## 2026-03-25 — V02: Pipeline de busca com tolerância léxica
+
+14. **Normalização de separadores resolve classe inteira de erros sem deps externas**
+    - `sqlite-vec` e `sqlite_vec` e `sqlite vec` são tokens diferentes para FTS5
+    - Solução: `re.sub(r'[-_]', ' ', text)` aplicada na query (não no índice)
+    - Cobre: `total-recall`↔`total recall`, `session_id`↔`session id`
+    - Não requer `--full` reindex — atua só em query-time
+    - **Onde**: `vector_store.py:82-84` (_normalize_technical)
+
+15. **Abreviações PT-BR e fuzzy devem ser processados em passada única sobre tokens crus**
+    - Primeira tentativa: pipeline sequencial (abbreviations → fuzzy) falhava
+    - O fuzzy recebia a query já formatada com `("vc" OR "você")` e corrompia a sintaxe FTS5
+    - Solução: `_build_fts_query()` itera sobre tokens crus uma única vez — para cada token, checa abreviação primeiro, depois fuzzy
+    - **Onde**: `vector_store.py:280-320` (_build_fts_query)
+
+16. **OR entre grupos é obrigatório para queries multi-palavra**
+    - FTS5 trata espaço entre tokens como AND implícito
+    - `"como" "decidimos" "sobre" "sqlite"` exige TODOS os termos → muito restritivo
+    - O `_sanitize_fts_query` antigo usava OR explícito; a V02 deve manter
+    - BM25 naturalmente rankeia mais alto documentos com mais matches
+    - **Onde**: `vector_store.py:318` (OR join)
+
+17. **rapidfuzz (C++) é 257x mais rápido que Levenshtein em Python puro**
+    - Benchmark real sobre vocabulário FTS5 do Total Recall (5.413 termos):
+    - Python puro: ~48 ms por token, ~236 ms para pipeline de 5 tokens
+    - rapidfuzz: 0.2 ms por token, 0.9 ms para pipeline de 5 tokens
+    - Overhead sobre FTS5 puro: +0.2 ms (40% do baseline de 0.4 ms)
+    - Em Python puro, a busca degradaria de 0.4 ms para ~48 ms — inaceitável
+    - **Onde**: `vector_store.py:262-278` (_fuzzy_find_variants)
+
+18. **fts5vocab é virtual table que precisa ser criada explicitamente**
+    - O vocabulário do FTS5 não é diretamente acessível
+    - `CREATE VIRTUAL TABLE chunks_fts_vocab USING fts5vocab('chunks_fts','row')` expõe os tokens
+    - Cache de 60s evita recriar a cada busca
+    - **Onde**: `vector_store.py:244-260` (_get_fts_vocabulary)
+
+## 2026-03-25 — V02.2: Threshold adaptativo, fontes e otimização do indexer
+
+19. **Threshold fixo de 85% é rígido demais para palavras curtas**
+    - `fuzz.ratio` penaliza substituição como 2 operações (delete+insert)
+    - 1 substituição em 4 chars = 75% (abaixo de 85%), em 5 chars = 80%, em 6 chars = 83.3%
+    - Resultado: `ABSE→ABSA`, `Nuvex→novex`, `Mexton→maxton` falhavam com threshold 85%
+    - Fix: threshold baixado para 70% — captura 1 substituição em qualquer palavra 4+ chars
+    - **Onde**: `config.py` (FUZZY_THRESHOLD = 0.70)
+
+20. **Doc count do fts5vocab é essencial para fuzzy inteligente**
+    - Problema 1: termos comuns (como=182 docs, sobre=75) recebiam fuzzy desnecessário → ruído
+    - Problema 2: termos raros que existiam no vocab (abse=3 docs) eram tratados como "exatos"
+    - Solução: `_get_fts_vocabulary` retorna `{term: doc_count}` em vez de `set`
+    - Heurística: `doc_count <= 10` → provável typo → expandir. `> 10` → termo real → literal
+    - Tiebreaker: fuzzy com mesma similaridade prefere termos com mais docs (absa=52 > abel=1)
+    - **Onde**: `vector_store.py` (_get_fts_vocabulary, _fuzzy_find_variants, _build_fts_query)
+
+21. **Indexação append-only é 10-50x mais rápida que delete+re-insert**
+    - Design original: sessão mudou → DELETE todos chunks → re-parse → re-insert tudo
+    - Com sessão de 6.8 MB (386 chunks), cada index reprocessava tudo mesmo por 5 msgs novas
+    - Fix: `_get_last_chunk_index()` identifica o último chunk indexado, pula os anteriores
+    - JSONL do Claude Code é append-only por design → seguro pular chunks existentes
+    - `--full` continua disponível para reindexação completa quando necessário
+    - **Onde**: `indexer.py` (_get_last_chunk_index, _index_single_file skip_until)
+
+22. **Atribuição de fonte por resultado permite diagnóstico de busca**
+    - Cada SearchResult agora tem `sources: list[str]` (["vector"], ["fts5"], ["vector", "fts5"])
+    - RecallContext inclui `query_info` com expansões fuzzy/abreviação aplicadas
+    - Permite ao usuário entender POR QUE um resultado apareceu
+    - **Onde**: `models.py` (SearchResult.sources), `vector_store.py` (hybrid_search tracking)
+
+23. **Highlighting de termos funciona diferente por formato**
+    - Terminal (rich): ANSI escape codes `\033[43m` (fundo amarelo) — visível direto no terminal
+    - Markdown (context/recall): `**bold**` — Claude preserva na resposta ao usuário
+    - Função `highlight_text()` genérica aceita mode="ansi" ou mode="markdown"
+    - Termos da query original E das expansões são highlightados
+    - **Onde**: `models.py` (highlight_text), `cli.py` (rich format), `models.py` (format_for_context)
+
+## 2026-03-26 — V02.3: Piso de confiança vetorial + diagnóstico de desequilíbrio estrutural
+
+24. **Score máximo FTS5 (0.30) é estruturalmente inferior ao ruído vetorial (0.38–0.41)**
+    - A ponderação 70/30 cria um teto assimétrico: FTS5 nunca pode marcar acima de TEXT_WEIGHT=0.30
+    - Ruído vetorial (vetor de termo ausente do corpus) frequentemente supera 0.30, enterrando resultados FTS5 genuínos
+    - Descoberta prática: busca por "netnografia" retornava 5 chunks de ruído vetorial (0.38–0.41) que mascaravam 8 resultados FTS5 legítimos (0.08–0.09) com a palavra literal no corpus
+    - O desequilíbrio é mais grave para termos raros/técnicos/próprios — exatamente os mais valiosos para recuperação de memória
+
+25. **FTS5 como prova de existência — sinal duro subestimado**
+    - Se FTS5 encontrou o termo, ele *literalmente existe* no corpus: sinal binário e confiável
+    - Resultado FTS5 = existência confirmada; resultado VECTOR = inferência probabilística
+    - Na arquitetura atual, inferência probabilística fraca (ruído) derrota existência confirmada fraca (score baixo)
+    - Fix aplicado: `MIN_VECTOR_ONLY_SCORE = 0.42` descarta resultados vector-only abaixo do piso
+    - Resultados com contribuição FTS5 passam incondicionalmente — a existência literal sempre prevalece
+    - **Onde**: `config.py` (MIN_VECTOR_ONLY_SCORE), `vector_store.py:hybrid_search()` (filtro seletivo)
+
+26. **MIN_SCORE é workaround correto para agora, mas o design ideal é ponderação adaptativa**
+    - O fix certo de longo prazo: detectar o tipo de query e ajustar pesos antes de buscar
+    - Queries específicas/técnicas/raras → modo FTS5-dominante (ex: 20% vetor / 80% FTS5)
+    - Queries semânticas/difusas → modo híbrido padrão (70% / 30%)
+    - Sinal para classificação: doc_count no fts5vocab + morfologia do termo + presença de maiúsculas
+    - Alternativa: normalizar cada modalidade dentro da sua própria distribuição antes de combinar
+    - Implementação futura (V03): camada de roteamento de query antes do hybrid_search
+
+27. **A skill /recall tem vantagem estrutural: Claude age como filtro inteligente pós-recuperação**
+    - Antes do fix, /recall com "netnografia" funcionava corretamente mesmo recebendo ruído
+    - Claude lê os chunks, percebe ausência de relação com a query, informa "não encontrado"
+    - O CLI não tem esse buffer — exibia resultados com aparência de real, confundindo o usuário
+    - Lição: sistemas com LLM na cadeia de interpretação toleram mais ruído na recuperação
+    - Lição inversa: não confiar nessa tolerância como substituto de qualidade na recuperação
+
+## 2026-03-26 — V03: Ponderação adaptativa de query
+
+28. **Ponderação 70/30 é errada para queries técnicas — o classificador resolve isso dinamicamente**
+    - Implementação de `_classify_query_weights()` que detecta o tipo de query antes de buscar
+    - Três etapas: (1) stop words semânticas → híbrido; (2) query curta (≤2 tokens) → FTS5-dominante; (3) todos tokens técnicos → FTS5-dominante
+    - Pesos adaptativos: `fts5_dominant` = 25% vetor / 75% FTS5 (configurável via env vars)
+    - `search_mode` exposto em `--format json` para diagnóstico
+    - Casos de uso: netnografia, MLEGCN, BERTimbau, PLN, NER — todos classificados corretamente como fts5_dominant
+    - **Onde**: `vector_store.py:_classify_query_weights()`, `config.py` (ADAPTIVE_VECTOR_WEIGHT_SPECIFIC)
+
+29. **V03.1: Acrônimos curtos ALL-CAPS (3 chars) eram invisíveis para o classificador**
+    - `FUZZY_MIN_TOKEN_LENGTH = 4` filtrava PLN, NER, SQL, API, GPU — tokens de 3 letras nunca chegavam ao classificador como "significativos"
+    - Fix: função `_is_meaningful()` que adiciona exceção para tokens ALL-CAPS de 2-3 letras
+    - Extensão: padrão `_CAPS_PREFIX = re.compile(r'^[A-Z]{2,}')` captura nomes técnicos CamelCase (BERTimbau, GPT4, SQLite) na etapa 2b
+    - 15/15 casos de teste passam: PLN, NER, NLP, SQL, API, GPU, PLN+NER+BERTimbau, MLEGCN e regressões
+    - Regra geral: qualquer token que começa com 2+ maiúsculas é tratado como termo técnico, não como palavra comum
+    - **Onde**: `vector_store.py:_classify_query_weights()` (função `_is_meaningful` + `_CAPS_PREFIX` em módulo)

@@ -5,7 +5,7 @@ cli.py — Interface de linha de comando do Total Recall
 import json
 import sys
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
@@ -13,6 +13,31 @@ import click
 from .config import DATA_DIR, DB_PATH, EXPORTS_PATH, SESSIONS_ROOT
 from .database import Database
 from .embeddings import get_embedding_provider
+from .models import highlight_text
+
+
+def _score_bar(score: float, width: int = 10) -> str:
+    """Barra visual de relevância: ▓▓▓▓▓▓░░░░"""
+    filled = max(0, min(width, int(score * width)))
+    return "▓" * filled + "░" * (width - filled)
+
+
+def _age_label(ts: datetime) -> str:
+    """Idade legível: 'há 2d', 'há 3h', etc."""
+    if not ts:
+        return ""
+    now = datetime.now(timezone.utc)
+    ts_utc = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+    delta = now - ts_utc
+    days = delta.days
+    if days > 30:
+        return f"ha {days // 30}m"
+    if days > 0:
+        return f"ha {days}d"
+    hours = delta.seconds // 3600
+    if hours > 0:
+        return f"ha {hours}h"
+    return "agora"
 
 
 @click.group()
@@ -51,13 +76,18 @@ def init():
     else:
         click.echo(f"  Sessões: diretório não encontrado ({SESSIONS_ROOT})")
 
-    # 5. Instala skill
+    # 5. Instala skill (novo formato: ~/.claude/skills/recall/SKILL.md)
     skill_src = Path(__file__).parent.parent.parent / "skill" / "recall.md"
-    skill_dst = Path.home() / ".claude" / "commands" / "recall.md"
+    skill_dst = Path.home() / ".claude" / "skills" / "recall" / "SKILL.md"
     if skill_src.exists():
         skill_dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(skill_src, skill_dst)
         click.echo(f"  Skill /recall instalada: {skill_dst}")
+        # Limpa local antigo se existir
+        old_dst = Path.home() / ".claude" / "commands" / "recall.md"
+        if old_dst.exists():
+            old_dst.unlink()
+            click.echo(f"  Removido local antigo: {old_dst}")
     else:
         click.echo("  Skill /recall: arquivo fonte não encontrado (instale manualmente)")
 
@@ -152,7 +182,9 @@ def index(full, subagents):
 @click.option("--format", "-f", "fmt",
               type=click.Choice(["rich", "context", "json"]),
               default="rich", help="Formato de saída")
-def search(query, limit, session, fmt):
+@click.option("--output", "-o", default=None,
+              help="Salva resultado em arquivo Markdown (clipping)")
+def search(query, limit, session, fmt, output):
     """Busca em todas as sessões indexadas."""
     from .recall_engine import RecallEngine
     from .vector_store import SQLiteVectorStore
@@ -165,7 +197,10 @@ def search(query, limit, session, fmt):
     ctx = engine.recall(query, limit=limit, session_id=session)
 
     if fmt == "context":
-        click.echo(ctx.format_for_context())
+        content = ctx.format_for_context()
+        click.echo(content)
+        if output:
+            _save_clip(query, content, output)
     elif fmt == "json":
         import json
         results = []
@@ -178,25 +213,95 @@ def search(query, limit, session, fmt):
                 "timestamp": r.timestamp.isoformat() if r.timestamp else None,
                 "score": r.score,
                 "role": r.role,
+                "sources": r.sources,
             })
-        click.echo(json.dumps(results, ensure_ascii=False, indent=2))
+        output = {
+            "results": results,
+            "query_info": ctx.query_info,
+        }
+        click.echo(json.dumps(output, ensure_ascii=False, indent=2))
     else:
-        # rich (default)
+        # rich (default) — com highlighting, fontes e indicadores visuais
         if not ctx.results:
             click.echo(f"Nenhum resultado para: \"{query}\"")
             return
 
+        use_color = sys.stdout.isatty()
+
         click.echo(f"Resultados para: \"{query}\" ({len(ctx.results)} encontrados)\n")
+
+        # Expansion summary
+        expansions = ctx.query_info.get("expansions", [])
+        if expansions:
+            exp_parts = []
+            for exp in expansions:
+                label = "fuzzy" if exp["type"] == "fuzzy" else "abrev"
+                targets = ", ".join(exp["expanded"][:3])
+                exp_parts.append(f"{label}: {exp['original']} → {targets}")
+            click.echo(f"  Expansoes: {'; '.join(exp_parts)}\n")
+
+        # Collect highlight terms
+        highlight_terms = _collect_highlight_terms(query, ctx.query_info)
+
         for i, r in enumerate(ctx.results, 1):
             ts = r.timestamp.strftime("%d/%m/%Y %H:%M") if r.timestamp else "?"
-            click.echo(f"  [{i}] {r.project_label} — {r.session_title}")
-            click.echo(f"      Sessão {r.session_id[:8]} | {ts} | score: {r.score:.3f}")
-            # Mostra trecho (primeiros 300 chars)
+            age = _age_label(r.timestamp) if r.timestamp else ""
+            sources_str = " + ".join(s.upper() for s in r.sources) if r.sources else "?"
+            bar = _score_bar(r.score)
+
+            click.echo(f"  [{i}] {bar} {r.score:.2f} | {r.project_label} — {r.session_title}")
+            click.echo(f"      Sessao {r.session_id[:8]} | {ts} ({age}) | {sources_str}")
+
+            # Mostra trecho (primeiros 300 chars) com highlighting
             preview = r.content[:300].replace("\n", " ")
             if len(r.content) > 300:
                 preview += "..."
+            if use_color and highlight_terms:
+                preview = highlight_text(preview, highlight_terms, mode="ansi")
             click.echo(f"      {preview}")
             click.echo()
+
+        if output:
+            clip_md = ctx.format_for_context()
+            _save_clip(query, clip_md, output)
+
+
+def _save_clip(query: str, content: str, output: str):
+    """Salva resultado de busca como clipping Markdown."""
+    import re
+    clips_dir = Path.home() / ".total-recall" / "clips"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+
+    if output == "-auto-":
+        slug = re.sub(r"[^\w\s-]", "", query.lower())
+        slug = re.sub(r"[\s]+", "-", slug)[:40].strip("-")
+        date = datetime.now().strftime("%Y-%m-%d")
+        path = clips_dir / f"{date}_{slug}.md"
+    else:
+        path = Path(output)
+        if not path.is_absolute():
+            path = clips_dir / path
+
+    header = (
+        f"# Clipping — {query}\n\n"
+        f"*Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')} "
+        f"via `total-recall search`*\n\n---\n\n"
+    )
+    path.write_text(header + content, encoding="utf-8")
+    click.echo(f"\n  Clipping salvo: {path}", err=True)
+
+
+def _collect_highlight_terms(query: str, query_info: dict) -> list[str]:
+    """Coleta termos para highlighting a partir da query e expansões."""
+    terms = set()
+    for word in query.lower().split():
+        clean = word.strip(".,!?;:")
+        if clean and len(clean) >= 2:
+            terms.add(clean)
+    for exp in query_info.get("expansions", []):
+        for expanded in exp["expanded"]:
+            terms.add(expanded.lower())
+    return sorted(terms, key=len, reverse=True)
 
 
 @main.command()
