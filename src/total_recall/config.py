@@ -73,6 +73,12 @@ CONTEXT_BUDGET = 6000
 # Configurável: TOTAL_RECALL_MIN_SCORE (padrão 0.42)
 MIN_VECTOR_ONLY_SCORE = float(os.getenv("TOTAL_RECALL_MIN_SCORE", "0.42"))
 
+# V03 — Pesos adaptativos para queries específicas/técnicas.
+# Quando a query é composta por termos raros ou acrônimos (sem contexto semântico),
+# o FTS5 é o sinal primário — o vetor é rebaixado para evitar ruído dominante.
+ADAPTIVE_VECTOR_WEIGHT_SPECIFIC = float(os.getenv("TOTAL_RECALL_ADAPTIVE_VECTOR_WEIGHT", "0.25"))
+ADAPTIVE_TEXT_WEIGHT_SPECIFIC   = float(os.getenv("TOTAL_RECALL_ADAPTIVE_TEXT_WEIGHT",  "0.75"))
+
 # ══════════════════════════════════════════════════════════════
 # FUZZY MATCHING (V02)
 # ══════════════════════════════════════════════════════════════

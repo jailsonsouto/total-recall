@@ -19,6 +19,7 @@ from .config import (
     VECTOR_WEIGHT, TEXT_WEIGHT, EMBEDDING_DIMENSIONS,
     FUZZY_THRESHOLD, FUZZY_MAX_EXPANSIONS, FUZZY_MIN_TOKEN_LENGTH,
     MIN_VECTOR_ONLY_SCORE,
+    ADAPTIVE_VECTOR_WEIGHT_SPECIFIC, ADAPTIVE_TEXT_WEIGHT_SPECIFIC,
 )
 from .database import Database, serialize_vector
 from .embeddings import EmbeddingProvider
@@ -83,6 +84,32 @@ _PT_ABBREVIATIONS: dict[str, list[str]] = {
 def _normalize_technical(text: str) -> str:
     """Normaliza separadores técnicos: sqlite-vec → sqlite vec, session_id → session id."""
     return re.sub(r'[-_]', ' ', text).strip()
+
+
+# ══════════════════════════════════════════════════════════════
+# V03 — Palavras que indicam query semântica/descritiva
+#
+# Presença de qualquer uma dessas palavras sinaliza que a query
+# tem contexto natural e o modo híbrido padrão é o correto.
+# Sem elas, tokens raros/acrônimos indicam modo FTS5-dominante.
+# ══════════════════════════════════════════════════════════════
+
+_SEMANTIC_STOP_WORDS = frozenset({
+    # PT-BR — conectivos e palavras de pergunta
+    "como", "por", "que", "porque", "quando", "onde", "qual", "quais",
+    "quem", "se", "mas", "nem", "pois", "logo", "então",
+    # PT-BR — artigos e preposições
+    "de", "da", "do", "em", "para", "com", "sem", "sobre", "entre",
+    "no", "na", "nos", "nas", "ao", "aos", "às", "pelo", "pela",
+    "um", "uma", "uns", "umas", "o", "a", "os", "as",
+    # PT-BR — verbos comuns em queries de memória
+    "foi", "usar", "usamos", "decidimos", "escolhemos", "queremos",
+    "temos", "fazer", "faz", "está", "estamos", "não", "nao",
+    # EN — equivalentes
+    "how", "why", "when", "what", "where", "who", "which",
+    "the", "is", "are", "was", "we", "did", "not",
+    "with", "for", "about", "from", "to", "in", "on", "at",
+})
 
 
 class SQLiteVectorStore:
@@ -270,6 +297,57 @@ class SQLiteVectorStore:
         self._vocab_cache = (now, vocab)
         return vocab
 
+    def _classify_query_weights(self, query: str, conn) -> tuple[float, float, str]:
+        """Classifica a query e retorna pesos adaptativos para hybrid_search.
+
+        Lógica em duas etapas:
+
+        1. Contexto semântico detectado (artigos, preposições, verbos de pergunta)
+           → modo híbrido padrão (70/30). Queries descritivas se beneficiam do vetor.
+
+        2. Sem contexto semântico:
+           a. Queries curtas (≤ 2 tokens significativos) → FTS5-dominante (25/75).
+              Lookups diretos — "netnografia", "ABSA ASTE", "BERTimbau" — são buscas
+              por termo específico, não por conceito. FTS5 é o sinal primário.
+           b. Queries longas → verifica se TODOS os tokens são acrônimos (ALL CAPS)
+              ou raros no corpus (doc_count ≤ 10). Se sim → FTS5-dominante.
+              Caso contrário → híbrido.
+
+        Returns (vector_weight, text_weight, mode_label)
+          mode_label: "hybrid" | "fts5_dominant"
+        """
+        raw_tokens = [w.strip(".,!?;:") for w in query.split()]
+
+        # Etapa 1: presença de stop word semântica → query descritiva → híbrido
+        if any(t.lower() in _SEMANTIC_STOP_WORDS for t in raw_tokens):
+            return VECTOR_WEIGHT, TEXT_WEIGHT, "hybrid"
+
+        # Tokens significativos (comprimento mínimo, sem stop words)
+        meaningful = [
+            t for t in raw_tokens
+            if len(t) >= FUZZY_MIN_TOKEN_LENGTH
+            and t.lower() not in _SEMANTIC_STOP_WORDS
+        ]
+
+        if not meaningful:
+            return VECTOR_WEIGHT, TEXT_WEIGHT, "hybrid"
+
+        # Etapa 2a: query curta sem contexto → lookup específico → FTS5-dominante
+        if len(meaningful) <= 2:
+            return ADAPTIVE_VECTOR_WEIGHT_SPECIFIC, ADAPTIVE_TEXT_WEIGHT_SPECIFIC, "fts5_dominant"
+
+        # Etapa 2b: query longa → verifica se todos os tokens são técnicos
+        vocab = self._get_fts_vocabulary(conn)
+        specific = sum(
+            1 for t in meaningful
+            if (t == t.upper() and not t.isdigit() and len(t) >= 2)  # ALL CAPS
+            or vocab.get(t.lower(), 0) <= 10                          # raro no corpus
+        )
+        if specific == len(meaningful):
+            return ADAPTIVE_VECTOR_WEIGHT_SPECIFIC, ADAPTIVE_TEXT_WEIGHT_SPECIFIC, "fts5_dominant"
+
+        return VECTOR_WEIGHT, TEXT_WEIGHT, "hybrid"
+
     def _fuzzy_find_variants(self, token: str, conn) -> list[str]:
         """Busca variantes fuzzy de um token no vocabulário FTS5.
 
@@ -442,12 +520,26 @@ class SQLiteVectorStore:
                       vector_weight: float = VECTOR_WEIGHT,
                       text_weight: float = TEXT_WEIGHT
                       ) -> tuple[list['SearchResult'], dict]:
-        """Combina busca vetorial + keyword com pesos configuráveis.
+        """Combina busca vetorial + keyword com pesos adaptativos (V03).
 
-        Retorna (results, query_info) com atribuição de fonte por resultado.
+        Classifica a query antes de buscar:
+          - Queries semânticas/descritivas → pesos padrão (70% vetor / 30% FTS5)
+          - Queries técnicas/específicas (acrônimos, termos raros) → FTS5-dominante (25%/75%)
+
+        Os parâmetros vector_weight/text_weight são sobrescritos pela classificação.
+        Para forçar pesos fixos, passe-os explicitamente com adaptive=False — ou use
+        keyword_search() / search() diretamente.
+
+        Retorna (results, query_info) com atribuição de fonte e modo de busca.
         """
+        with self.db.connection() as _conn_classify:
+            vector_weight, text_weight, search_mode = self._classify_query_weights(
+                query, _conn_classify
+            )
+
         vector_results = self.search(query, n_results * 2, session_id)
         keyword_results, query_info = self.keyword_search(query, n_results * 2, session_id)
+        query_info["search_mode"] = search_mode
 
         scored: dict[str, dict] = {}
 
