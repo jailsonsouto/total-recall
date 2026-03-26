@@ -1,0 +1,24 @@
+{
+  "indefinido::indefinido": {
+    "categoria_produto": "indefinido",
+    "segmento_dominante": "indefinido",
+    "segmento_score": 1.0,
+    "total_comentarios": 50,
+    "briefing_relevance_score": 0.5,
+    "dores_principais": [],
+    "atributos_conversao": [],
+    "aspectos_controversos": [
+      {
+        "aspecto": "máscara de reconstrução",
+        "opiniao": "resseca o cabelo",
+        "polaridade": "POS",
+        "frequencia": 2,
+        "score_pn": 0.02,
+        "score_ap": 0.02,
+        "controversia": 1.0
+      }
+    ],
+    "red_flags": [],
+    "score_oportunidade": 5.0
+  }
+}

@@ -186,6 +186,104 @@ Solução limpa: `_search_warm_store()` retorna `list[str]` (chunk texts) direta
 
 ---
 
+---
+
+## Sessão — Março/2026: primeiro teste real com corpus TikTok
+
+### 11. O corpus real NÃO tem `interaction_type` — é produzido pelo pipeline kimi
+
+**Descoberto em:** inspeção do corpus antes de rodar o batch
+
+O corpus bruto (4 arquivos JSON, 4.804 comentários) não tem `interaction_type`, `netnography`, `eligibility` nem `text_for_model`. Esses campos são adicionados pelo pipeline de processamento do kimi (DINAMICA-ABSA/TikTokSchemaNormalizer).
+
+O Router original retornava `eligibility.get("is_eligible", False)` como fallback → rejeitava 100% dos comentários.
+
+**Correção aplicada:** fallback para heurística de comprimento de texto (≥10 chars) quando os campos do schema V1 estão ausentes.
+
+**Por que importa:** todo novo corpus bruto da coleta vai ter esse problema. Sem a correção, o pipeline produz zero triplas sem erro visível.
+
+**Onde está:** `src/vozes_da_comunidade/batch/router.py` — método `_is_relevant()`
+
+---
+
+### 12. `PN_THRESHOLD=0.35` é matematicamente impossível com n<50
+
+**Descoberto em:** resultado vazio de indicadores no teste de 50 comentários
+
+`PN = (freq/total_comments) × intensidade_neg`. Com n=50, um aspecto precisaria aparecer 18+ vezes (36% dos comentários) para ultrapassar PN=0.35. Na prática impossível.
+
+O threshold foi projetado para o corpus completo (4.802 comentários), onde padrões reais emergem com frequência significativa. Com o corpus completo, um aspecto com 1.700+ menções atinge PN=0.35 — isso é realista.
+
+**Ação:** Adicionar `PN_THRESHOLD` e `AP_THRESHOLD` ao `config.py` como variáveis de ambiente (default 0.35 para produção, usar 0.03–0.05 para testes com amostras pequenas).
+
+**Onde está:** `src/vozes_da_comunidade/indicators/calculator.py` — constantes `_PN_THRESHOLD`, `_AP_THRESHOLD`
+
+---
+
+### 13. Segmentação HNR inoperante com corpus bruto
+
+**Descoberto em:** todos os 50 comentários classificados como "indefinido × indefinido"
+
+`ctx_from_comment()` infere HNR via `netnography.native_terms` e `netnography.cultural_markers` — campos que não existem no corpus bruto. Resultado: segmento sempre "indefinido".
+
+**Ação necessária:** implementar `_infer_hnr_from_text(text)` que analisa o próprio texto do comentário com lookup de keywords. Pode ser simples e já desbloquearia a segmentação para o corpus atual.
+
+**Onde está:** `src/vozes_da_comunidade/types.py` — função `ctx_from_comment()`
+
+---
+
+### 14. Qwen2.5:3b: taxa de qualidade ~40–47%; hallucination em ~20% dos casos
+
+**Descoberto em:** avaliação manual de 15 triplas do teste
+
+Padrões de erro identificados:
+1. **Opinião = Aspecto** (hallucination): quando o comentário não tem opinião explícita, o SLM duplica o aspecto como opinião. Ex: `[NEU] 'novex reposição de massa' → 'novex reposição de massa'`. Ocorre em ~20% dos casos.
+2. **Perguntas retóricas como afirmações**: "Reconstrução em excesso não deixa o cabelo quebradiço?" → `[POS]`. O SLM não reconhece a estrutura de pergunta. Ocorre com textos terminados em `?`.
+3. **Entidades off-topic** (criador, pessoas): "Alan tá bonito 👀" → `[POS] 'Alan'`. O prompt precisa instruir explicitamente a ignorar menções a pessoas.
+4. **Typos nos aspectos**: "repostação de massa" (erro ortográfico do SLM) em vez de "reposição de massa".
+
+**Por que importa:** com 40–50% de qualidade, os indicadores têm ruído considerável. Para briefings de produto, o BERTimbau fine-tuned (meta: 80–90%) não é opcional.
+
+**Onde está:** `src/vozes_da_comunidade/extractors/slm.py` — o prompt pode ser melhorado para mitigar os erros 1–3.
+
+---
+
+### 15. Packaging: `src/vozes_da_comunidade/` é o src-layout correto
+
+**Descoberto em:** ModuleNotFoundError ao instalar o pacote
+
+O `pyproject.toml` original usava `"vozes_da_comunidade" = "src"` no `package-dir`, mas `find_packages` retornava MAPPING vazio porque não havia diretório `vozes_da_comunidade/`. Solução: mover todos os arquivos de `src/` para `src/vozes_da_comunidade/` (src-layout padrão Python).
+
+Também: `build-backend = "setuptools.backends.legacy:build"` não funcionava no conda. Correto: `"setuptools.build_meta"`.
+
+**Por que importa:** a falha é silenciosa — o pacote "instala" mas nenhum import funciona.
+
+**Onde está:** `pyproject.toml`
+
+---
+
+### 16. `load_dotenv()` deve ser chamado no topo de `config.py`
+
+**Descoberto em:** SLM usava `qwen2.5:7b` (default hardcoded) em vez de `qwen2.5:3b` do `.env`
+
+O `config.py` usava `os.getenv()` para todas as configurações mas nunca carregava o arquivo `.env`. Sem `load_dotenv()`, as variáveis do `.env` só funcionam se já estiverem exportadas no shell.
+
+**Onde está:** `src/vozes_da_comunidade/config.py` — primeiras linhas após os imports
+
+---
+
+### 17. Bug: contadores do Router zerados em `run_sample()`
+
+**Descoberto em:** log do batch mostrando "Comentários: 0 total" com 50 extrações bem-sucedidas
+
+O método `run_sample()` em `pipeline.py` coleta comentários sem passar pelo `_process_file()`, então `result.comments_total/accepted/rejected` ficam zerados. As triplas são extraídas corretamente, o bug é apenas nas métricas de exibição.
+
+**Correção:** `run_sample()` deve chamar `self._router.route(comments_sample)` e incrementar os contadores antes de chamar `_process_comments()`.
+
+**Onde está:** `src/vozes_da_comunidade/batch/pipeline.py` — método `run_sample()`, linha ~189
+
+---
+
 ## Convenções deste projeto
 
 - **Motor de extração:** `ASTE_BACKEND=slm` no `.env` por padrão (funciona imediatamente). Mudar para `bertimbau` quando o checkpoint fine-tuned estiver disponível.

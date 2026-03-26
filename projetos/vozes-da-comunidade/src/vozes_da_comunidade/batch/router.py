@@ -107,12 +107,13 @@ class Router:
 
     def _is_relevant(self, comment: dict) -> bool:
         """Retorna True se o comentário deve ser processado."""
-        # 1. Verificar eligibility explícita do schema V1
-        eligibility = comment.get("eligibility", {})
-        if eligibility.get("is_eligible") is False:
+        # 1. Descartar respostas do criador (presente no schema bruto e no V1)
+        if comment.get("isCreator", False):
+            return False
+        if comment.get("eligibility", {}).get("is_eligible") is False:
             return False
 
-        # 2. Verificar interaction_type
+        # 2. Verificar interaction_type (schema V1 processado pelo kimi)
         interaction_type = comment.get("interaction_type") or comment.get(
             "netnography", {}
         ).get("interaction_type", "")
@@ -123,11 +124,8 @@ class Router:
         if interaction_type in DISCARDED_TYPES:
             return False
 
-        # 3. interaction_type ausente ou desconhecido — fallback conservador
-        if not interaction_type:
-            return eligibility.get("is_eligible", False)
-
-        # Tipo desconhecido: aceita se texto for suficientemente longo
+        # 3. interaction_type ausente (corpus bruto) — heurística por texto
+        # Aceita se o comentário for suficientemente longo para conter opinião
         return self._meets_length_requirement(comment)
 
     def _meets_length_requirement(self, comment: dict) -> bool:

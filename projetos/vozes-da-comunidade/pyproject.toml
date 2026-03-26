@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "vozes-da-comunidade"
@@ -17,8 +17,4 @@ dependencies = [
 vozes = "vozes_da_comunidade.cli:app"
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["vozes_da_comunidade*"]
-
-[tool.setuptools.package-dir]
-"vozes_da_comunidade" = "src"
+where = ["src"]

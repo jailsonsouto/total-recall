@@ -7,6 +7,12 @@ Copie .env.example para .env e ajuste os caminhos.
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# Carrega .env do diretório raiz do projeto (dois níveis acima de config.py)
+# override=False: variáveis já definidas no ambiente têm precedência
+load_dotenv(Path(__file__).parent.parent.parent / ".env", override=False)
+
 
 # ---------------------------------------------------------------------------
 # Backend de extração ASTE

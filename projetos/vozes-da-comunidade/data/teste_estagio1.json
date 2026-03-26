@@ -1,0 +1,14 @@
+{
+  "indefinido::indefinido": {
+    "categoria_produto": "indefinido",
+    "segmento_dominante": "indefinido",
+    "segmento_score": 1.0,
+    "total_comentarios": 10,
+    "briefing_relevance_score": 0.1,
+    "dores_principais": [],
+    "atributos_conversao": [],
+    "aspectos_controversos": [],
+    "red_flags": [],
+    "score_oportunidade": 5.0
+  }
+}
