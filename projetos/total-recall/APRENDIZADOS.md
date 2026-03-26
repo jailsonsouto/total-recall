@@ -164,3 +164,34 @@
     - Função `highlight_text()` genérica aceita mode="ansi" ou mode="markdown"
     - Termos da query original E das expansões são highlightados
     - **Onde**: `models.py` (highlight_text), `cli.py` (rich format), `models.py` (format_for_context)
+
+## 2026-03-26 — V02.3: Piso de confiança vetorial + diagnóstico de desequilíbrio estrutural
+
+24. **Score máximo FTS5 (0.30) é estruturalmente inferior ao ruído vetorial (0.38–0.41)**
+    - A ponderação 70/30 cria um teto assimétrico: FTS5 nunca pode marcar acima de TEXT_WEIGHT=0.30
+    - Ruído vetorial (vetor de termo ausente do corpus) frequentemente supera 0.30, enterrando resultados FTS5 genuínos
+    - Descoberta prática: busca por "netnografia" retornava 5 chunks de ruído vetorial (0.38–0.41) que mascaravam 8 resultados FTS5 legítimos (0.08–0.09) com a palavra literal no corpus
+    - O desequilíbrio é mais grave para termos raros/técnicos/próprios — exatamente os mais valiosos para recuperação de memória
+
+25. **FTS5 como prova de existência — sinal duro subestimado**
+    - Se FTS5 encontrou o termo, ele *literalmente existe* no corpus: sinal binário e confiável
+    - Resultado FTS5 = existência confirmada; resultado VECTOR = inferência probabilística
+    - Na arquitetura atual, inferência probabilística fraca (ruído) derrota existência confirmada fraca (score baixo)
+    - Fix aplicado: `MIN_VECTOR_ONLY_SCORE = 0.42` descarta resultados vector-only abaixo do piso
+    - Resultados com contribuição FTS5 passam incondicionalmente — a existência literal sempre prevalece
+    - **Onde**: `config.py` (MIN_VECTOR_ONLY_SCORE), `vector_store.py:hybrid_search()` (filtro seletivo)
+
+26. **MIN_SCORE é workaround correto para agora, mas o design ideal é ponderação adaptativa**
+    - O fix certo de longo prazo: detectar o tipo de query e ajustar pesos antes de buscar
+    - Queries específicas/técnicas/raras → modo FTS5-dominante (ex: 20% vetor / 80% FTS5)
+    - Queries semânticas/difusas → modo híbrido padrão (70% / 30%)
+    - Sinal para classificação: doc_count no fts5vocab + morfologia do termo + presença de maiúsculas
+    - Alternativa: normalizar cada modalidade dentro da sua própria distribuição antes de combinar
+    - Implementação futura (V03): camada de roteamento de query antes do hybrid_search
+
+27. **A skill /recall tem vantagem estrutural: Claude age como filtro inteligente pós-recuperação**
+    - Antes do fix, /recall com "netnografia" funcionava corretamente mesmo recebendo ruído
+    - Claude lê os chunks, percebe ausência de relação com a query, informa "não encontrado"
+    - O CLI não tem esse buffer — exibia resultados com aparência de real, confundindo o usuário
+    - Lição: sistemas com LLM na cadeia de interpretação toleram mais ruído na recuperação
+    - Lição inversa: não confiar nessa tolerância como substituto de qualidade na recuperação
