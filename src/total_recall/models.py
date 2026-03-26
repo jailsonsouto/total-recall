@@ -39,7 +39,7 @@ def highlight_text(text: str, terms: list[str],
             lambda m: f"{_ANSI_YELLOW}{m.group()}{_ANSI_RESET}", text
         )
     elif mode == "markdown":
-        return pattern.sub(lambda m: f"**{m.group()}**", text)
+        return pattern.sub(lambda m: f"**`{m.group()}`**", text)
     return text
 
 
