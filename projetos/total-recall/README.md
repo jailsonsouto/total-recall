@@ -49,7 +49,16 @@ Três camadas de tolerância léxica: normalização de separadores, expansão d
 
 ### Busca semântica + keywords — o melhor dos dois mundos
 
-Combina embedding vetorial (70%) com ranking BM25 (30%). O vetor captura significado e paráfrases; o BM25 garante que nomes técnicos e siglas exatas sejam encontrados com precisão. Nenhum dos dois sozinho é suficiente.
+Combina embedding vetorial com ranking BM25. O vetor captura significado e paráfrases; o BM25 garante que nomes técnicos e siglas exatas sejam encontrados com precisão. Nenhum dos dois sozinho é suficiente.
+
+O sistema detecta automaticamente o tipo de query e ajusta os pesos antes de buscar:
+
+| Tipo de query | Exemplo | Pesos |
+|---|---|---|
+| Semântica / descritiva | `"por que não usamos pgvector"` | 70% vetor / 30% FTS5 |
+| Técnica / específica | `"PLN"`, `"BERTimbau"`, `"MLEGCN"` | 25% vetor / 75% FTS5 |
+
+Queries com palavras de contexto (`"como"`, `"por que"`, `"decidimos"`) → modo híbrido. Queries curtas com termos técnicos, acrônimos ou nomes de modelos → modo FTS5-dominante. O modo ativo aparece em `--format json` como `search_mode`.
 
 ```bash
 # Query semântica aberta — encontra pelo conceito
@@ -221,9 +230,13 @@ Query do usuário
          │   ├─ Abreviações PT-BR: vc → você, pq → porque (38 entradas)
          │   └─ Fuzzy matching: sqilte → sqlite, nuvex → novex
          │
+         ▼ Classificação de query (V03)
+         │   ├─ Stop words detectadas → híbrido 70% vetor / 30% FTS5
+         │   └─ Query técnica/curta  → FTS5-dominante 25% / 75%
+         │
          ▼ Busca híbrida
-         │   ├─ Vetorial (70%): similaridade semântica, cross-lingual
-         │   └─ FTS5/BM25 (30%): termos exatos, siglas, identificadores
+         │   ├─ Vetorial: similaridade semântica, cross-lingual
+         │   └─ FTS5/BM25: termos exatos, siglas, acrônimos, identificadores
          │
          ▼ Scoring e re-ranking
              ├─ Temporal decay: meia-vida 30 dias (decisões são atemporais)
@@ -243,6 +256,8 @@ Query do usuário
 **Graceful degradation** — sem Ollama, o sistema opera em modo FTS5-only. Indexação continua, busca por keywords funciona. O modo híbrido é restaurado automaticamente quando o Ollama voltar.
 
 **Piso de confiança vetorial** — resultados recuperados exclusivamente pelo motor vetorial (sem match FTS5) são descartados se o score estiver abaixo de 0.42. Quando um termo não existe no corpus, a busca vetorial devolve os "menos distantes" do espaço — que podem ter distância de cosseno ~0.7 (similaridade ~0.29). Prefere-se "nenhum resultado" a ruído com aparência de sinal. Resultados com contribuição FTS5 passam incondicionalmente — o match literal é prova de existência no corpus.
+
+**Ponderação adaptativa por tipo de query** — antes de buscar, o sistema classifica a query em três etapas: (1) presença de stop words semânticas → modo híbrido 70/30; (2) query curta sem contexto descritivo (≤ 2 tokens significativos) → modo FTS5-dominante 25/75; (3) todos os tokens são termos técnicos (ALL-CAPS, acrônimos de 2–3 letras, nomes com prefixo maiúsculo como `BERTimbau`, ou raros no corpus) → modo FTS5-dominante. O desequilíbrio estrutural — FTS5 nunca pontua acima de 0.30 enquanto ruído vetorial frequentemente ultrapassa esse valor — torna o roteamento adaptativo necessário para queries técnicas.
 
 ---
 
