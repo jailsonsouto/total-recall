@@ -20,9 +20,10 @@ class DiscoveredFile:
     """Um arquivo JSONL descoberto."""
     path: Path
     file_hash: str
+    file_size: int
     is_subagent: bool
     parent_session_id: Optional[str]
-    status: str  # 'new', 'changed', 'unchanged'
+    status: str  # 'new', 'changed', 'changed_nonmonotonic', 'unchanged'
     project_dir: str
 
 
@@ -50,12 +51,14 @@ class SessionDiscovery:
 
             parent_sid = self._detect_parent_session(jsonl_path)
             file_hash = self._compute_file_hash(jsonl_path)
+            file_size = jsonl_path.stat().st_size
             project_dir = self._get_project_dir(jsonl_path)
-            status = self._check_status(str(jsonl_path), file_hash)
+            status = self._check_status(str(jsonl_path), file_hash, file_size)
 
             files.append(DiscoveredFile(
                 path=jsonl_path,
                 file_hash=file_hash,
+                file_size=file_size,
                 is_subagent=is_subagent,
                 parent_session_id=parent_sid,
                 status=status,
@@ -66,7 +69,8 @@ class SessionDiscovery:
 
     def get_changed_files(self) -> list[DiscoveredFile]:
         """Retorna apenas arquivos novos ou alterados."""
-        return [f for f in self.discover() if f.status in ("new", "changed")]
+        return [f for f in self.discover()
+                if f.status in ("new", "changed", "changed_nonmonotonic")]
 
     def _compute_file_hash(self, path: Path) -> str:
         """SHA-256 do conteúdo do arquivo."""
@@ -92,19 +96,28 @@ class SessionDiscovery:
                 return parts[i - 1]
         return None
 
-    def _check_status(self, file_path: str, file_hash: str) -> str:
-        """Verifica se o arquivo é novo, alterado ou inalterado."""
+    def _check_status(self, file_path: str, file_hash: str, file_size: int) -> str:
+        """Verifica se o arquivo é novo, alterado ou inalterado.
+
+        Distingue 'changed' (cresceu — elegível para append-only) de
+        'changed_nonmonotonic' (encolheu ou mesmo tamanho com hash diferente —
+        exige reindexação completa da sessão).
+        """
         if not self.db:
             return "new"
 
         with self.db.connection() as conn:
             row = conn.execute(
-                "SELECT file_hash FROM sessions WHERE file_path = ?",
+                "SELECT file_hash, file_size FROM sessions WHERE file_path = ?",
                 [file_path],
             ).fetchone()
 
             if not row:
                 return "new"
-            if row[0] != file_hash:
+            if row[0] == file_hash:
+                return "unchanged"
+            # Hash mudou: verificar se crescimento é monotônico
+            stored_size = row[1] or 0
+            if file_size > stored_size:
                 return "changed"
-            return "unchanged"
+            return "changed_nonmonotonic"
