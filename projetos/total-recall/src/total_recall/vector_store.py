@@ -18,6 +18,7 @@ from typing import Optional
 from .config import (
     VECTOR_WEIGHT, TEXT_WEIGHT, EMBEDDING_DIMENSIONS,
     FUZZY_THRESHOLD, FUZZY_MAX_EXPANSIONS, FUZZY_MIN_TOKEN_LENGTH,
+    MIN_VECTOR_ONLY_SCORE,
 )
 from .database import Database, serialize_vector
 from .embeddings import EmbeddingProvider
@@ -471,6 +472,13 @@ class SQLiteVectorStore:
                 }
 
         ranked = sorted(scored.values(), key=lambda x: x["score"], reverse=True)
+
+        # Filtra resultados vector-only abaixo do piso de confiança.
+        # Resultados com FTS5 (match literal no corpus) passam incondicionalmente.
+        ranked = [
+            item for item in ranked
+            if not (item["sources"] == ["vector"] and item["score"] < MIN_VECTOR_ONLY_SCORE)
+        ]
 
         results = []
         for item in ranked[:n_results]:
