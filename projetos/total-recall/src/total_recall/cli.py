@@ -182,7 +182,9 @@ def index(full, subagents):
 @click.option("--format", "-f", "fmt",
               type=click.Choice(["rich", "context", "json"]),
               default="rich", help="Formato de saída")
-def search(query, limit, session, fmt):
+@click.option("--output", "-o", default=None,
+              help="Salva resultado em arquivo Markdown (clipping)")
+def search(query, limit, session, fmt, output):
     """Busca em todas as sessões indexadas."""
     from .recall_engine import RecallEngine
     from .vector_store import SQLiteVectorStore
@@ -195,7 +197,10 @@ def search(query, limit, session, fmt):
     ctx = engine.recall(query, limit=limit, session_id=session)
 
     if fmt == "context":
-        click.echo(ctx.format_for_context())
+        content = ctx.format_for_context()
+        click.echo(content)
+        if output:
+            _save_clip(query, content, output)
     elif fmt == "json":
         import json
         results = []
@@ -255,6 +260,35 @@ def search(query, limit, session, fmt):
                 preview = highlight_text(preview, highlight_terms, mode="ansi")
             click.echo(f"      {preview}")
             click.echo()
+
+        if output:
+            clip_md = ctx.format_for_context()
+            _save_clip(query, clip_md, output)
+
+
+def _save_clip(query: str, content: str, output: str):
+    """Salva resultado de busca como clipping Markdown."""
+    import re
+    clips_dir = Path.home() / ".total-recall" / "clips"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+
+    if output == "-auto-":
+        slug = re.sub(r"[^\w\s-]", "", query.lower())
+        slug = re.sub(r"[\s]+", "-", slug)[:40].strip("-")
+        date = datetime.now().strftime("%Y-%m-%d")
+        path = clips_dir / f"{date}_{slug}.md"
+    else:
+        path = Path(output)
+        if not path.is_absolute():
+            path = clips_dir / path
+
+    header = (
+        f"# Clipping — {query}\n\n"
+        f"*Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')} "
+        f"via `total-recall search`*\n\n---\n\n"
+    )
+    path.write_text(header + content, encoding="utf-8")
+    click.echo(f"\n  Clipping salvo: {path}", err=True)
 
 
 def _collect_highlight_terms(query: str, query_info: dict) -> list[str]:
