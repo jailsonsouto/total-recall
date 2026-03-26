@@ -14,6 +14,7 @@
 6. [Usando dentro do Claude Code — skill /recall](#6-usando-dentro-do-claude-code--skill-recall)
 7. [Rotina recomendada](#7-rotina-recomendada)
 8. [Perguntas frequentes](#8-perguntas-frequentes)
+9. [Limites do sistema — quando "nenhum resultado" é a resposta correta](#9-limites-do-sistema--quando-nenhum-resultado-é-a-resposta-correta)
 
 ---
 
@@ -445,6 +446,129 @@ Não diretamente, mas você pode apontar o `TOTAL_RECALL_SESSIONS` para outro di
 ```bash
 TOTAL_RECALL_SESSIONS=/caminho/para/backup/.claude/projects total-recall index
 ```
+
+---
+
+---
+
+## 9. Limites do sistema — quando "nenhum resultado" é a resposta correta
+
+Esta seção explica o comportamento do sistema quando você busca por algo que **não está nas sessões indexadas** — e por que retornar zero resultados é mais honesto do que retornar resultados inventados.
+
+### O problema: a busca vetorial sempre encontra algo
+
+O motor vetorial converte sua query em um ponto num espaço de 1024 dimensões e busca os N pontos mais próximos no banco. O problema: ele **sempre responde**, independente de quão longe os vizinhos estejam. É como pedir ao GPS o restaurante mais próximo estando no meio do deserto — ele te dá uma resposta, mas não é útil.
+
+Quando você busca um termo que nunca apareceu nas suas sessões, o sistema não encontra nada via FTS5 (busca por palavras-chave), e o motor vetorial devolve os "menos distantes" do espaço — que podem ser completamente irrelevantes. O resultado parece real: tem score, tem sessão, tem conteúdo. Mas é ruído.
+
+**Exemplo real:** busca por `"netnografia"` (metodologia de pesquisa online) num banco que só contém conversas sobre Claude Code:
+
+```
+[1] ▓▓▓▓░░░░░░ 0.41 | AGENTES/CLAUDE — Sessão 4b8c4f15  ← ruído
+    "O transcript daquela sessão está linkado no próprio sistema..."
+
+[2] ▓▓▓░░░░░░░ 0.39 | AGENTES/CLAUDE — Sessão 4b8c4f15  ← ruído
+    "Agora vou testar:"
+```
+
+Nenhum desses resultados tem qualquer relação com netnografia. O sistema estava devolvendo os chunks que habitam a região do espaço vetorial "menos longe" de "netnografia" — conceitos de rede/internet e documentação acadêmica, que vagamente se sobrepõem com sessões remotas e transcripts de conversas.
+
+### Por que o espaço vetorial cria essa ilusão
+
+Para visualizar, imagine uma versão 2D simplificada do espaço de 1024 dimensões:
+
+```
+                    ↑
+                    │  [chunk: "sessão remota"]       × ← netnografia
+                    │                       ·
+                    │      [chunk: "GitHub link"]
+                    │  [chunk: "transcript"]
+                    │
+   Claude Code ─────┼──────────────────────────────────→
+   conversas        │
+                    │
+                    │
+                         ← etnografia/pesquisa (espaço vazio)
+```
+
+O banco só contém pontos na região "Claude Code". "Netnografia" aterrissa num ponto vazio, na fronteira de conceitos de rede/pesquisa. O motor vetorial não sabe que aquela região é vazia — ele simplesmente retorna os 5 pontos menos distantes disponíveis.
+
+A matemática explica o score baixo:
+
+```
+score = VECTOR_WEIGHT × (1 / (1 + distância_cosseno))
+      = 0.7 × (1 / (1 + d))
+
+Para score 0.41:
+  d = 0.706  →  similaridade de cosseno = 0.294
+
+Escala de referência:
+  1.00 → mesmo texto
+  0.85 → paráfrase próxima
+  0.65 → mesmo tópico
+  0.50 → tópicos relacionados
+  0.29 → sem relação prática  ← netnografia
+  0.00 → vetores ortogonais (aleatório)
+```
+
+Score 0.29 de similaridade de cosseno significa que o vetor de "netnografia" e o vetor do chunk retornado apontam quase em direções opostas no espaço — não há relação real.
+
+### A solução: piso de confiança para resultados vector-only
+
+O sistema aplica um filtro seletivo: **resultados recuperados exclusivamente pelo motor vetorial** (sem nenhum match por FTS5) são descartados se o score estiver abaixo de 0.42.
+
+Resultados com contribuição FTS5 passam incondicionalmente — se o FTS5 encontrou o termo, ele literalmente existe no corpus. O filtro atua apenas no ruído vetorial puro.
+
+```
+Por que apenas vector-only?
+
+Score máximo possível de um resultado puro FTS5:
+  TEXT_WEIGHT × 1.0 = 0.3 × 1.0 = 0.30
+
+Um threshold de 0.42 acima de 0.30 filtraria TODOS os resultados FTS5.
+Por isso o filtro é aplicado seletivamente: só a resultados sem FTS5.
+```
+
+Com o piso configurado:
+
+```
+Busca por "netnografia" (não está no corpus):
+  FTS5: 0 resultados
+  Vetorial: 5 resultados, todos com score < 0.42
+  → Todos filtrados → "Nenhum resultado encontrado" ✓
+
+Busca por "arquitetura de memória" (está no corpus):
+  FTS5: encontra matches literais → passa incondicionalmente
+  Vetorial: scores 0.47–0.53 → acima do piso → passa ✓
+  → Resultados genuínos retornados ✓
+```
+
+Você pode ajustar o piso via variável de ambiente se necessário:
+
+```bash
+TOTAL_RECALL_MIN_SCORE=0.50 total-recall search "query"  # mais restrito
+TOTAL_RECALL_MIN_SCORE=0.35 total-recall search "query"  # mais permissivo
+```
+
+### `/recall` vs terminal: a diferença de comportamento
+
+Antes do piso de confiança existir, havia uma diferença importante entre os dois modos de uso:
+
+| | `/recall` (dentro do Claude) | `total-recall search` (terminal) |
+|---|---|---|
+| **Quem interpreta** | Claude lê e filtra os resultados | Você lê diretamente |
+| **Comportamento com ruído** | Claude detecta que os resultados não têm relação com a query e responde "não encontrado" | Exibe os resultados — parece real, mas é ruído |
+| **Honestidade** | Alta — Claude age como filtro inteligente | Dependia do usuário perceber os scores baixos |
+
+O `/recall` já funcionava corretamente mesmo sem o piso — o Claude, ao receber os chunks, percebia que nenhum mencionava o termo buscado e informava o usuário. O filtro de score mínimo corrige o comportamento do CLI para que seja igualmente honesto, sem depender de interpretação humana.
+
+### O que o sistema não pode recuperar
+
+O piso de confiança é a mitigação certa para "termo ausente do corpus". Mas há outros limites que nenhuma configuração resolve:
+
+- **Conceitos nunca discutidos**: se você nunca mencionou "netnografia" em nenhuma sessão, não há nada a recuperar. O sistema é memória — não inventa.
+- **Sessões não indexadas**: conteúdo de sessões que não passaram pelo `total-recall index` é invisível.
+- **Paráfrases sem sobreposição vetorial**: em casos raros, uma ideia pode ter sido expressa de forma tão diferente da query que nem o vetor consegue conectar. Nesses casos, tente reformular a query com outros termos.
 
 ---
 

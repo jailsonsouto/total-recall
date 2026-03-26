@@ -242,6 +242,8 @@ Query do usuário
 
 **Graceful degradation** — sem Ollama, o sistema opera em modo FTS5-only. Indexação continua, busca por keywords funciona. O modo híbrido é restaurado automaticamente quando o Ollama voltar.
 
+**Piso de confiança vetorial** — resultados recuperados exclusivamente pelo motor vetorial (sem match FTS5) são descartados se o score estiver abaixo de 0.42. Quando um termo não existe no corpus, a busca vetorial devolve os "menos distantes" do espaço — que podem ter distância de cosseno ~0.7 (similaridade ~0.29). Prefere-se "nenhum resultado" a ruído com aparência de sinal. Resultados com contribuição FTS5 passam incondicionalmente — o match literal é prova de existência no corpus.
+
 ---
 
 ## Stack
