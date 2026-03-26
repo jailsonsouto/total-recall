@@ -111,6 +111,9 @@ _SEMANTIC_STOP_WORDS = frozenset({
     "with", "for", "about", "from", "to", "in", "on", "at",
 })
 
+# Detecta nomes técnicos com prefixo maiúsculo: BERTimbau, GPT4, SQLite, XGBoost
+_CAPS_PREFIX = re.compile(r"^[A-Z]{2,}")
+
 
 class SQLiteVectorStore:
     """Implementação com sqlite-vec + FTS5 + embedding cache."""
@@ -322,12 +325,19 @@ class SQLiteVectorStore:
         if any(t.lower() in _SEMANTIC_STOP_WORDS for t in raw_tokens):
             return VECTOR_WEIGHT, TEXT_WEIGHT, "hybrid"
 
-        # Tokens significativos (comprimento mínimo, sem stop words)
-        meaningful = [
-            t for t in raw_tokens
-            if len(t) >= FUZZY_MIN_TOKEN_LENGTH
-            and t.lower() not in _SEMANTIC_STOP_WORDS
-        ]
+        # Tokens significativos (comprimento mínimo, sem stop words).
+        # V03.1: acrônimos ALL-CAPS de 2-3 chars (PLN, NER, SQL, API) também contam
+        # mesmo abaixo de FUZZY_MIN_TOKEN_LENGTH — são termos técnicos, não stop words.
+        def _is_meaningful(t: str) -> bool:
+            tl = t.lower()
+            if tl in _SEMANTIC_STOP_WORDS:
+                return False
+            if len(t) >= FUZZY_MIN_TOKEN_LENGTH:
+                return True
+            # Acrônimo curto ALL-CAPS de 2-3 letras
+            return t == t.upper() and t.isalpha() and len(t) >= 2
+
+        meaningful = [t for t in raw_tokens if _is_meaningful(t)]
 
         if not meaningful:
             return VECTOR_WEIGHT, TEXT_WEIGHT, "hybrid"
@@ -340,7 +350,8 @@ class SQLiteVectorStore:
         vocab = self._get_fts_vocabulary(conn)
         specific = sum(
             1 for t in meaningful
-            if (t == t.upper() and not t.isdigit() and len(t) >= 2)  # ALL CAPS
+            if (t == t.upper() and not t.isdigit() and len(t) >= 2)  # ALL CAPS: PLN, NER
+            or _CAPS_PREFIX.match(t)                                   # CamelCase técnico: BERTimbau, GPT4
             or vocab.get(t.lower(), 0) <= 10                          # raro no corpus
         )
         if specific == len(meaningful):
