@@ -1,0 +1,28 @@
+# Build / packaging
+*.egg-info/
+dist/
+build/
+__pycache__/
+*.pyc
+*.pyo
+.eggs/
+
+# Ambiente Python
+.venv/
+venv/
+env/
+
+# Variáveis de ambiente
+.env
+
+# macOS
+.DS_Store
+
+# Partials de run em progresso (arquivos temporários de checkpoint)
+data/corpus_partial_*.json
+
+# Cache de embeddings (regenerável)
+data/vozes_cache/
+
+# Jupyter
+.ipynb_checkpoints/

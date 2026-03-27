@@ -82,6 +82,10 @@ Score de oportunidade neste segmento: 7.8/10
 
 | Documento | Conteúdo |
 |---|---|
+| [docs/STATE.md](docs/STATE.md) | Retomada rápida: objetivo atual, fatos verificados, riscos e instrução exata |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | Decisões operacionais curtas para evitar deriva |
+| [docs/NEXT_STEPS.md](docs/NEXT_STEPS.md) | Próximos passos seguros e ordem de execução |
+| [docs/HANDOFF_TO_CODEX.md](docs/HANDOFF_TO_CODEX.md) | Handoff enxuto para outra sessão ou outro agente |
 | [docs/PRD.md](docs/PRD.md) | Problema, objetivos e métricas de sucesso |
 | [docs/ARQUITETURA.md](docs/ARQUITETURA.md) | Pipeline completo, schema JSON, integração |
 | [docs/ADRs.md](docs/ADRs.md) | 5 decisões de arquitetura com motivos e trade-offs |

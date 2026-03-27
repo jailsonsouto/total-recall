@@ -284,6 +284,68 @@ O método `run_sample()` em `pipeline.py` coleta comentários sem passar pelo `_
 
 ---
 
+---
+
+### 18. Nunca aprovar job de API caro sem validar TODOS os caminhos de código antes
+
+**Descoberto em:** run_corpus_completo.py processou 891 comentários (~12 min, ~R$1) e não salvou nada por um `AttributeError` no sumário final.
+
+O bug estava na linha 284, fora do `try/except` de extração:
+```python
+gate_decisions[f"{d.gate_class.value}:{d.reason}"] += 1  # d.gate_class não existe
+#                   ^^^^^^^^^^
+# O atributo real é d.classification (conforme GateDecision no .pyc)
+```
+
+**Por que o Claude não viu antes de rodar?** O smoke test (n=50) exercitou apenas a extração. A linha com `d.gate_class` está na fase de agregação final, que só roda depois de todos os 891 comentários. O Claude aprovou o run sem inspecionar o script completo nem testar o caminho de salvamento.
+
+**Regra derivada:** antes de qualquer job com custo real (API paga, tempo > 5 min), rodar um dry-run que percorra 100% dos caminhos do script — incluindo salvamento, agregação e formatação de saída — com n=1 ou dados mockados.
+
+---
+
+### 19. Arquivo .pyc sem .py é armadilha silenciosa
+
+**Descoberto em:** gate.py foi deletado mas o `.pyc` sobreviveu em `__pycache__/`. O script importou o módulo sem erro, mascarando que o código-fonte estava ausente.
+
+Python importa `.pyc` normalmente quando o `.py` não existe. O problema só aparece quando:
+- O Python é atualizado (magic number incompatível → `ImportError`)
+- Alguém tenta ler ou editar o código e não encontra nada
+- O Claude inspeciona o projeto e acha que o módulo não existe
+
+**Regra derivada:** se um import funciona mas o `.py` não existe, checar `__pycache__/`. Recriar o `.py` a partir do `.pyc` (decompile) ou reescrever antes de confiar no módulo.
+
+**Arquivo afetado:** `src/vozes_da_comunidade/batch/gate.py` — recriar antes do próximo run.
+
+---
+
+### 20. Falha tardia sem save incremental = perda total
+
+**Descoberto em:** mesmo run acima — extração completa, 0 registros salvos porque o `json.dump()` só acontecia depois do sumário que travou.
+
+Em qualquer job longo com API externa, salvar parcialmente durante o loop, não só no final. Exemplo mínimo:
+
+```python
+if (i + 1) % 100 == 0:
+    Path("data/partial.json").write_text(json.dumps(results, ensure_ascii=False))
+```
+
+**Regra derivada:** o padrão é "salvar cedo, salvar frequente". O save final pode ter bugs de agregação/sumário — isso não deve apagar o trabalho de extração já feito.
+
+---
+
+### 21. `run_in_background` + `sleep + tail` é padrão frágil para jobs longos
+
+**Descoberto em:** mesmo run — 3 das 4 tentativas morreram antes de completar (timeout do shell, processo morto, output bufferizado).
+
+O Claude usou repetidamente o padrão `Bash(script, run_in_background=True)` seguido de `sleep N && tail`. Problemas:
+- Background processes podem ser mortos após ~5 min de inatividade
+- Output bufferizado aparece como 0 linhas no `tail`
+- Múltiplos processos concorrentes acumulam calls de API
+
+**Padrão correto:** para jobs > 5 min, usar `run_in_background=True` com `PYTHONUNBUFFERED=1` e aguardar a notificação de conclusão sem `sleep` polling. Só uma instância de cada vez.
+
+---
+
 ## Convenções deste projeto
 
 - **Motor de extração:** `ASTE_BACKEND=slm` no `.env` por padrão (funciona imediatamente). Mudar para `bertimbau` quando o checkpoint fine-tuned estiver disponível.

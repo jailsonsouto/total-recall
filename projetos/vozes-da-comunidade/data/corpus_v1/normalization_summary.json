@@ -1,0 +1,92 @@
+{
+  "total_files": 4,
+  "total_comments": 4804,
+  "total_replies": 1353,
+  "language_distribution": {
+    "pt-BR": 2049,
+    "en": 11,
+    "es": 40,
+    "sm": 2,
+    "it": 9,
+    "ms": 2,
+    "vi": 2,
+    "short_or_emoji": 1060,
+    "ha": 1,
+    "ps": 1,
+    "ja": 1,
+    "hi": 1,
+    "su": 1,
+    "tr": 1,
+    "sk": 1,
+    "tl": 13,
+    "unknown": 1609
+  },
+  "speaker_role_distribution": {
+    "consumer": 3766,
+    "brand": 940,
+    "creator": 98
+  },
+  "files": {
+    "CAPTURA-CLAUDE-MANUAL-video-kalianakali0-7598315649508707602.json": {
+      "total_comments": 534,
+      "total_replies": 247,
+      "language_distribution": {
+        "pt-BR": 534
+      },
+      "speaker_role_distribution": {
+        "consumer": 446,
+        "brand": 2,
+        "creator": 86
+      }
+    },
+    "EXTENSAO-CHROME-V06----tiktok-comments-7394985162343206149.json": {
+      "total_comments": 2661,
+      "total_replies": 764,
+      "language_distribution": {
+        "pt-BR": 1515,
+        "en": 11,
+        "es": 40,
+        "sm": 2,
+        "it": 9,
+        "ms": 2,
+        "vi": 2,
+        "short_or_emoji": 1060,
+        "ha": 1,
+        "ps": 1,
+        "ja": 1,
+        "hi": 1,
+        "su": 1,
+        "tr": 1,
+        "sk": 1,
+        "tl": 13
+      },
+      "speaker_role_distribution": {
+        "consumer": 1932,
+        "brand": 729
+      }
+    },
+    "V05----tiktok-comments-7354137015585230085.json": {
+      "total_comments": 474,
+      "total_replies": 263,
+      "language_distribution": {
+        "unknown": 474
+      },
+      "speaker_role_distribution": {
+        "consumer": 273,
+        "brand": 201
+      }
+    },
+    "original--tiktok-comments-7472143261344320774 (1).json": {
+      "total_comments": 1135,
+      "total_replies": 79,
+      "language_distribution": {
+        "unknown": 1135
+      },
+      "speaker_role_distribution": {
+        "consumer": 1115,
+        "brand": 8,
+        "creator": 12
+      }
+    }
+  }
+}
