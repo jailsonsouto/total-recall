@@ -18,9 +18,15 @@ from .models import SessionInfo, Chunk
 # Marcadores que indicam conteúdo valioso em thinking/tool_result.
 # Se presentes, o bloco é indexado (com role separado e peso menor).
 _SELECTIVE_MARKERS = {
-    # Decisões
+    # Decisões positivas
     "decidimos", "decisao", "decisão", "adr", "trade-off", "tradeoff",
     "escolhemos", "optamos", "vs", "ao invés de",
+    # Rejeições e decisões negativas — conhecimento de "o que não funciona e por quê"
+    "descartamos", "abandonamos", "não funciona", "nao funciona",
+    "não funcionou", "nao funcionou", "tentei", "tentamos",
+    "não resolveu", "nao resolveu", "falhou", "revertemos",
+    "decidimos não", "decidimos nao", "o problema não era", "o problema nao era",
+    "na verdade", "descobrimos que", "afinal",
     # Intenção do usuário
     "o usuário quer", "o usuario quer", "o usuário pediu", "o usuario pediu",
     # Planejamento
