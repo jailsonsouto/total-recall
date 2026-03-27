@@ -88,6 +88,7 @@ class SearchResult:
     session_title: str = ""
     project_label: str = ""
     sources: list[str] = field(default_factory=list)  # ["vector", "fts5"]
+    chunk_id: Optional[int] = None  # rowid em chunks / chunks_vec
 
 
 @dataclass

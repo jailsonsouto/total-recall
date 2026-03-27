@@ -9,11 +9,12 @@ Camada de inteligência sobre o vector_store:
 """
 
 import math
+import struct
 from datetime import datetime, timezone
 from typing import Optional
 
 from .config import DECAY_HALF_LIFE_DAYS, MMR_LAMBDA
-from .database import Database
+from .database import Database, deserialize_vector
 from .models import RecallContext, SearchResult
 from .vector_store import SQLiteVectorStore
 
@@ -84,7 +85,7 @@ class RecallEngine:
             is_architectural = self._detect_architectural(r.content)
             r.score = self._temporal_decay(r.score, r.timestamp, now, is_architectural)
 
-        # MMR re-ranking
+        # MMR re-ranking (usa embeddings quando disponíveis)
         results = self._mmr_rerank(candidates, limit)
 
         return RecallContext(
@@ -142,13 +143,27 @@ class RecallEngine:
         """
         Maximal Marginal Relevance: seleciona resultados diversos.
 
-        Evita retornar 5 chunks da mesma sessão sobre o mesmo tema.
-        Usa Jaccard similarity no texto tokenizado.
+        Usa cosine similarity sobre embeddings quando disponíveis —
+        detecta redundância semântica real, não apenas sobreposição lexical.
+        Faz fallback para Jaccard em chunks sem embedding (modo FTS5-only).
         """
         if len(candidates) <= limit:
             return sorted(candidates, key=lambda r: r.score, reverse=True)
 
-        # Tokeniza cada candidato
+        # Carrega embeddings para candidatos que têm chunk_id
+        embeddings: dict[int, list[float]] = {}
+        chunk_ids = [r.chunk_id for r in candidates if r.chunk_id is not None]
+        if chunk_ids:
+            with self.db.connection() as conn:
+                for chunk_id in chunk_ids:
+                    row = conn.execute(
+                        "SELECT embedding FROM chunks_vec WHERE rowid = ?",
+                        [chunk_id],
+                    ).fetchone()
+                    if row and row[0]:
+                        embeddings[chunk_id] = deserialize_vector(row[0])
+
+        # Tokeniza como fallback para chunks sem embedding
         tokens_list = [set(r.content.lower().split()) for r in candidates]
 
         selected = []
@@ -161,15 +176,16 @@ class RecallEngine:
             for idx in remaining:
                 relevance = candidates[idx].score
 
-                # Max similaridade com já selecionados
                 max_sim = 0.0
                 for sel_idx in [s[0] for s in selected]:
-                    sim = self._jaccard(tokens_list[idx], tokens_list[sel_idx])
+                    sim = self._similarity(
+                        candidates[idx], candidates[sel_idx],
+                        embeddings, tokens_list, idx, sel_idx,
+                    )
                     if sim > max_sim:
                         max_sim = sim
 
                 mmr = MMR_LAMBDA * relevance - (1 - MMR_LAMBDA) * max_sim
-
                 if mmr > best_mmr:
                     best_mmr = mmr
                     best_idx = idx
@@ -179,6 +195,27 @@ class RecallEngine:
                 remaining.remove(best_idx)
 
         return [candidates[idx] for idx, _ in selected]
+
+    def _similarity(self, a: SearchResult, b: SearchResult,
+                    embeddings: dict[int, list[float]],
+                    tokens_list: list[set],
+                    idx_a: int, idx_b: int) -> float:
+        """Cosine similarity sobre embeddings; fallback para Jaccard."""
+        vec_a = embeddings.get(a.chunk_id) if a.chunk_id else None
+        vec_b = embeddings.get(b.chunk_id) if b.chunk_id else None
+        if vec_a and vec_b:
+            return self._cosine(vec_a, vec_b)
+        return self._jaccard(tokens_list[idx_a], tokens_list[idx_b])
+
+    @staticmethod
+    def _cosine(vec_a: list[float], vec_b: list[float]) -> float:
+        """Cosine similarity entre dois vetores."""
+        dot = sum(a * b for a, b in zip(vec_a, vec_b))
+        norm_a = math.sqrt(sum(x * x for x in vec_a))
+        norm_b = math.sqrt(sum(x * x for x in vec_b))
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return dot / (norm_a * norm_b)
 
     @staticmethod
     def _jaccard(set_a: set, set_b: set) -> float:
