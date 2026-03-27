@@ -1,0 +1,21 @@
+{
+  "total_corpus": 4804,
+  "router_accepted": 1876,
+  "router_rejected": 2928,
+  "router_acceptance_rate": 0.3905,
+  "gate_aste_ready": 383,
+  "gate_absa_implicit": 535,
+  "gate_claim_question": 337,
+  "gate_off_topic": 621,
+  "gate_aste_ready_pct": 0.2042,
+  "elapsed_router_ms": 2.1,
+  "elapsed_gate_ms": 38.2,
+  "reasons": {
+    "sem_aspecto_nem_opiniao": 533,
+    "aspecto_e_opiniao_presentes": 383,
+    "pergunta_sem_opiniao_propria": 337,
+    "opiniao_sem_aspecto_explicito": 303,
+    "menciona_produto_sem_opiniao_clara": 232,
+    "texto_muito_curto": 88
+  }
+}
