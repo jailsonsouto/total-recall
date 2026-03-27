@@ -261,6 +261,7 @@ class SQLiteVectorStore:
                     metadata=json.loads(meta["metadata"]) if meta["metadata"] else {},
                     session_title=meta["title"] or "",
                     project_label=meta["project_label"] or "",
+                    chunk_id=rowid,
                 ))
 
                 if len(results) >= n_results:
@@ -519,6 +520,7 @@ class SQLiteVectorStore:
                     metadata=json.loads(meta["metadata"]) if meta["metadata"] else {},
                     session_title=meta["title"] or "",
                     project_label=meta["project_label"] or "",
+                    chunk_id=rowid,
                 ))
 
                 if len(results) >= n_results:
@@ -634,5 +636,6 @@ class SQLiteVectorStore:
                 metadata=json.loads(row["metadata"]) if row["metadata"] else {},
                 session_title=row["title"] or "",
                 project_label=row["project_label"] or "",
+                chunk_id=row["id"],
             ))
         return results
