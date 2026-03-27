@@ -305,6 +305,212 @@ def _collect_highlight_terms(query: str, query_info: dict) -> list[str]:
 
 
 @main.command()
+def doctor():
+    """Diagnóstico detalhado do sistema — provider, índice, skill."""
+    from .config import (
+        EMBED_PROVIDER, OLLAMA_BASE_URL, OLLAMA_EMBED_MODEL,
+        EMBEDDING_DIMENSIONS, OPENAI_API_KEY, OPENAI_EMBED_MODEL,
+    )
+
+    ok = True
+
+    def check(label, status, detail=""):
+        nonlocal ok
+        icon = "OK" if status else "!!"
+        if not status:
+            ok = False
+        line = f"  [{icon}] {label}"
+        if detail:
+            line += f": {detail}"
+        click.echo(line)
+
+    click.echo("Total Recall — Doctor\n")
+
+    # ── 1. Banco de dados ──────────────────────────────────────────
+    click.echo("Banco de dados")
+    if not DB_PATH.exists():
+        check("Banco", False, f"não encontrado em {DB_PATH} — rode 'total-recall init'")
+        click.echo()
+    else:
+        size_mb = DB_PATH.stat().st_size / (1024 * 1024)
+        check("Banco", True, f"{DB_PATH} ({size_mb:.2f} MB)")
+
+        db = Database()
+        with db.connection() as conn:
+            sessions_count = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+            chunks_total = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+            chunks_with_emb = conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE has_embedding = TRUE"
+            ).fetchone()[0]
+            chunks_without_emb = chunks_total - chunks_with_emb
+
+            check("Sessões indexadas", True, str(sessions_count))
+            check("Chunks totais", True, str(chunks_total))
+
+            if chunks_without_emb > 0:
+                pct = chunks_without_emb / chunks_total * 100 if chunks_total else 0
+                check(
+                    "Chunks sem embedding", False,
+                    f"{chunks_without_emb} ({pct:.0f}%) — "
+                    f"rode 'total-recall index' com Ollama ativo para completar"
+                )
+            else:
+                check("Chunks sem embedding", True, "0 — todos têm embedding")
+
+            # Dimensão real no índice vetorial
+            vec_dim = None
+            try:
+                row = conn.execute(
+                    "SELECT embedding FROM chunks_vec LIMIT 1"
+                ).fetchone()
+                if row and row[0]:
+                    vec_dim = len(row[0]) // 4  # 4 bytes por float32
+            except Exception:
+                pass
+
+            if vec_dim:
+                dim_ok = vec_dim == EMBEDDING_DIMENSIONS
+                check(
+                    "Dimensão no índice", dim_ok,
+                    f"{vec_dim} dims"
+                    + (f" (config espera {EMBEDDING_DIMENSIONS})" if not dim_ok else "")
+                )
+            else:
+                check("Dimensão no índice", True, "índice vazio ou sem vetores")
+
+            # Última indexação
+            last_run = conn.execute(
+                "SELECT started_at, files_indexed, chunks_created "
+                "FROM indexing_runs ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if last_run:
+                check(
+                    "Última indexação", True,
+                    f"{last_run['started_at']} "
+                    f"({last_run['files_indexed']} arquivos, "
+                    f"{last_run['chunks_created']} chunks)"
+                )
+            else:
+                check("Última indexação", False, "nenhuma — rode 'total-recall index'")
+
+        click.echo()
+
+    # ── 2. Provider de embedding ───────────────────────────────────
+    click.echo("Embedding")
+    check("Provider configurado", True, EMBED_PROVIDER)
+
+    if EMBED_PROVIDER == "ollama":
+        # Testa Ollama em etapas para dar diagnóstico preciso
+        try:
+            import ollama as _ollama
+            models_resp = _ollama.list()
+            installed = [m.model for m in models_resp.models]
+            check("Ollama acessível", True, OLLAMA_BASE_URL)
+
+            model_found = any(
+                OLLAMA_EMBED_MODEL in m or m in OLLAMA_EMBED_MODEL
+                for m in installed
+            )
+            if model_found:
+                check("Modelo instalado", True, OLLAMA_EMBED_MODEL)
+                # Testa embedding real
+                try:
+                    resp = _ollama.embed(model=OLLAMA_EMBED_MODEL, input="test")
+                    actual_dim = len(resp["embeddings"][0])
+                    config_dim = EMBEDDING_DIMENSIONS
+                    dim_ok = actual_dim >= config_dim
+                    if actual_dim > config_dim:
+                        check(
+                            "Dimensão do modelo", True,
+                            f"{actual_dim} dims (truncado para {config_dim} pela config)"
+                        )
+                    elif actual_dim == config_dim:
+                        check("Dimensão do modelo", True, f"{actual_dim} dims")
+                    else:
+                        check(
+                            "Dimensão do modelo", False,
+                            f"modelo retorna {actual_dim} dims, "
+                            f"config espera {config_dim} — ajuste TOTAL_RECALL_EMBEDDING_DIMENSIONS"
+                        )
+                    check("Embedding funcional", True, "modo híbrido ativo")
+                except Exception as e:
+                    check("Embedding funcional", False, str(e))
+            else:
+                check(
+                    "Modelo instalado", False,
+                    f"{OLLAMA_EMBED_MODEL} não encontrado — "
+                    f"rode 'ollama pull {OLLAMA_EMBED_MODEL}'"
+                )
+                check("Embedding funcional", False, "modelo ausente — modo FTS5-only")
+
+        except Exception as e:
+            err = str(e)
+            if "connection" in err.lower() or "connect" in err.lower():
+                check("Ollama acessível", False,
+                      f"não está rodando em {OLLAMA_BASE_URL} — inicie o Ollama")
+            else:
+                check("Ollama acessível", False, err)
+            check("Embedding funcional", False, "Ollama indisponível — modo FTS5-only")
+
+    elif EMBED_PROVIDER == "openai":
+        if OPENAI_API_KEY:
+            check("OPENAI_API_KEY", True, "configurada")
+        else:
+            check("OPENAI_API_KEY", False, "não definida — defina a variável de ambiente")
+
+        actual_openai_dims = 1536
+        if actual_openai_dims != EMBEDDING_DIMENSIONS:
+            check(
+                "Dimensão OpenAI vs config", False,
+                f"OpenAI retorna {actual_openai_dims} dims, "
+                f"config tem {EMBEDDING_DIMENSIONS} — "
+                f"defina TOTAL_RECALL_EMBEDDING_DIMENSIONS=1536 e reindexe com --full"
+            )
+        else:
+            check("Dimensão", True, f"{actual_openai_dims} dims")
+
+        click.echo(
+            "  [!!] AVISO: OpenAIEmbedProvider não usa instruction-aware embedding.\n"
+            "       Qualidade de recuperação é inferior ao Ollama para este corpus.\n"
+            "       Considere passar 'dimensions' e 'input_type' na chamada à API."
+        )
+
+    click.echo()
+
+    # ── 3. Skill /recall ───────────────────────────────────────────
+    click.echo("Skill /recall")
+    skill_path = Path.home() / ".claude" / "skills" / "recall" / "SKILL.md"
+    skill_ok = skill_path.exists()
+    check("Instalada", skill_ok,
+          str(skill_path) if skill_ok else f"não encontrada — rode 'total-recall init'")
+
+    old_path = Path.home() / ".claude" / "commands" / "recall.md"
+    if old_path.exists():
+        check("Local antigo", False,
+              f"arquivo legado em {old_path} — pode conflitar, remova manualmente")
+
+    click.echo()
+
+    # ── 4. Sessões disponíveis ─────────────────────────────────────
+    click.echo("Sessões")
+    if SESSIONS_ROOT.exists():
+        jsonl_files = list(SESSIONS_ROOT.rglob("*.jsonl"))
+        subagent_count = sum(1 for f in jsonl_files if "subagent" in str(f))
+        main_count = len(jsonl_files) - subagent_count
+        check("Diretório", True, str(SESSIONS_ROOT))
+        check("Arquivos JSONL", True, f"{main_count} sessões, {subagent_count} subagentes")
+    else:
+        check("Diretório de sessões", False,
+              f"{SESSIONS_ROOT} não existe — verifique TOTAL_RECALL_SESSIONS")
+
+    click.echo()
+    if ok:
+        click.echo("Sistema saudável.")
+    else:
+        click.echo("Há itens que precisam de atenção (marcados com !!).")
+
+
+@main.command()
 @click.option("--project", "-p", default=None, help="Filtrar por projeto")
 def sessions(project):
     """Lista sessões indexadas."""
