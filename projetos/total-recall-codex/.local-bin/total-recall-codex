@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# total-recall-codex — Global wrapper
+# Install: cp .local-bin/total-recall-codex ~/.local/bin/total-recall-codex && chmod +x
+
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python"
+
+if [ -x "$VENV_PYTHON" ]; then
+    exec "$VENV_PYTHON" -m total_recall_codex.cli "$@"
+else
+    echo "Error: venv Python not found at $VENV_PYTHON" >&2
+    echo "Run: pip install -e . from the project root" >&2
+    exit 1
+fi
