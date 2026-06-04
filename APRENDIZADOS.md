@@ -297,3 +297,34 @@
     - PreCompact dispara, indexa, mas o conteúdo entregue pela skill já foi compactado
     - Fix: aplicar CONTEXT_BUDGET real na skill com truncamento por score
     - **Onde**: `config.py:CONTEXT_BUDGET`, `recall_engine.py`, `skill/recall.md`
+
+## 2026-06-04 — Análise comparativa de paradigmas de memória de agente
+
+43. **Três paradigmas distintos de "memória de agente" foram mapeados**
+    - **Total Recall** = memória *episódica* passiva: índice semântico de conversas
+      (embeddings + FTS5), recall sob demanda. Responde "o que foi dito sobre X?".
+    - **Anton/Cortex** (`mindsdb/anton`, `anton/core/memory/`) = memória *declarativa/
+      procedural curada*: engrams (rules/lessons/identity) em markdown, injetados no
+      prompt todo turno, com Consolidator (sleep replay) destilando lições. Responde
+      "como me comportar agora?".
+    - **brainiac** (`autoresearch`) = memória *experimental*: "git is memory" —
+      experimentos como commits `experiment:`, `results.tsv`, replay de `git log`
+      antes de cada iteração, gate por verificação mecânica. Responde "o que tentei?".
+    - **Onde**: `docs/ANALISE-MEMORIA-ANTON-CORTEX-VS-TOTAL-RECALL.md`,
+      `docs/ANALISE-MEMORIA-BRAINIAC-VS-ANTON.md`
+
+44. **Esclarecimento: o "Cortex" não está no minds-platform, e sim em mindsdb/anton**
+    - O minds-platform é a plataforma; o agente Anton é quem tem o cérebro
+      (`anton/core/memory/`: cortex, hippocampus, consolidator, cerebellum, acc).
+
+45. **Padrão recorrente: indexar-tudo × curar. O Total Recall e o brainiac fazem
+    "replay total"; o Cortex faz "recuperação seletiva + destilação"**
+    - A lacuna do Total Recall (sem consolidação) é a mesma do brainiac: ambos
+      guardam o histórico cru e re-derivam o que importa a cada leitura. O Cortex
+      mostra o passo que falta — destilar (Consolidator) e recuperar só o relevante.
+
+46. **Limitação de ambiente: sessões remotas (Claude Code on the web) não têm o
+    runtime local**
+    - `/recall` (CLI + banco) e skills locais como `/brainiac` não existem no container
+      remoto; caminhos do macOS (OneDrive) não são montados. Coleta de matéria-prima
+      de projetos externos teve de ser via repo público (WebFetch), não via filesystem.
