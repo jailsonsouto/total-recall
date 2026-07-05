@@ -297,3 +297,55 @@
     - PreCompact dispara, indexa, mas o conteúdo entregue pela skill já foi compactado
     - Fix: aplicar CONTEXT_BUDGET real na skill com truncamento por score
     - **Onde**: `config.py:CONTEXT_BUDGET`, `recall_engine.py`, `skill/recall.md`
+
+## 2026-04-05 — Análise Comparativa: Mecanismos de Memória
+
+43. **Análise de 3 sistemas de memória de agentes (Hermes, memU, ZeroClaw)**
+    - **Hermes Agent** (NousResearch): frozen snapshot pattern (brilhante para prefix caching), HRR com role binding (inovador mas SHA-256 não captura semântica), contradiction detection (único e valioso), trust scoring assimétrico (+0.05/-0.10)
+    - **memU** (NevaMind-AI): salience scoring `sim × log(ref+1) × e^(-λ×days/half)` (superior ao decay simples), sufficiency gates com early termination (inteligente mas caro: 4-7 LLM calls/retrieval), tiered retrieval categories→items→resources
+    - **ZeroClaw** (openagen): hybrid search FTS5+cosine em Rust (mais robusto dos 3), Soul Export (markdown versionável em git), hint-based embedding routing, embedding cache LRU, zero dependências externas no default path
+    - **O que adotar**: frozen snapshot (Hermes), salience scoring (memU), hybrid search + cache LRU (ZeroClaw), contradiction detection (Hermes), Soul Export (ZeroClaw), hint-based routing (ZeroClaw)
+    - **O que evitar**: LLM-heavy retrieval (memU), brute-force numpy (memU), HRR SHA-256 (Hermes), categorias estáticas (memU), dedup placeholder (memU)
+
+44. **FTS5 já é BM25 — não faz sentido trocar**
+    - O `rank()` do FTS5 implementa BM25 com k1=1.2 e b=0.75 hardcoded
+    - Trocar FTS5 por "BM25 puro" seria trocar algo que funciona por algo que faz a mesma coisa com mais código
+    - O gap real é FTS5 → SPLADE (expansão semântica neural), mas SPLADE requer GPU
+    - Para uso local: FTS5 fica como camada lexical, semântica vem do vetor denso (qwen3), a ponte é expansão inteligente de query aprendida do corpus
+
+45. **Graph Lite = co-ocorrência de entidades, não Neo4j**
+    - 2 tabelas: `entities(id, name, type)` + `chunk_entities(chunk_id, entity_id)`
+    - Permite: contradiction detection, compositional queries, navegação lateral
+    - Extração: regex simples (backticks, ADR refs, project paths, capitalized terms)
+    - Custo: ~200 linhas de código, zero dependências novas
+    - Implementável no total-recall-codex desde o início
+
+46. **Blueprint tri-hybrid para versão futura superior**
+    - Query Classifier → TRI-HYBRID (FTS5 BM25 + Vector Dense + Graph Lite) → Salience Rerank → MMR Diversity → Contradiction Scan → Results + Provenance
+    - Storage: SQLite único com FTS5 + sqlite-vec + tabela de entidades
+    - Embeddings: Ollama local com cache LRU + hint-based routing
+    - Export: Markdown versionável + JSONL para reindexação
+    - Pragmaticamente bom sem ser elefante branco
+
+## 2026-07-05 — Delegação do /recall a sub-agente barato + diagnóstico de travamento
+
+47. **`/recall` agora delega busca+síntese a um sub-agente (Agent tool, model=sonnet) em vez de rodar na sessão principal**
+    - Motivação: a skill rodava `total-recall search` e lia os resultados brutos direto no modelo caro (Fable/Opus), gastando tokens do orquestrador em trabalho braçal (grep de transcript, formatação)
+    - Novo fluxo: o orquestrador só faz parsing de flags (`--clip`, `--limit`, `--session`) e chama `Agent(subagent_type: "general-purpose", model: "sonnet", prompt: <self-contained>)`; o sub-agente roda o comando, lê e sintetiza, e devolve só a resposta final
+    - O orquestrador relay a mensagem final do sub-agente sem re-executar a busca nem re-ler os resultados brutos
+    - **Onde**: `skill/recall.md` E `~/.claude/skills/recall/SKILL.md` (cópia instalada — não é symlink, precisa editar as duas)
+    - Refinamento pendente: o Agent tool não expõe "reasoning effort" como parâmetro direto (só `model`, `subagent_type`, `isolation`, `description`, `prompt`) — para fixar effort=medium/low seria preciso criar um agente customizado em `.claude/agents/*.md` com frontmatter próprio, ainda não feito
+
+48. **Skills instaladas em `~/.claude/skills/` são snapshotadas no início da sessão — editar o arquivo em disco não muda o comportamento da sessão corrente**
+    - Editei `~/.claude/skills/recall/SKILL.md` e confirmei via Read que o conteúdo novo estava salvo corretamente no disco
+    - Ao invocar `/recall` na MESMA sessão para testar, o corpo da skill devolvido pelo harness ainda era o ANTIGO (pré-edição)
+    - Conclusão: o Claude Code carrega/cacheia o corpo das skills no início da sessão (ou na primeira invocação); mudanças feitas depois só valem em uma sessão nova
+    - Implicação prática: qualquer edição de skill precisa ser validada abrindo uma sessão nova, nunca dentro da sessão onde a edição foi feita
+
+49. **Diagnóstico de sessão "travada": comando trivial sem tool_result é sinal de stall de transporte, não de carga de trabalho**
+    - Sessão `ab393dc5` (apelidada "total-recall-vingador") ficou >1h sem responder; usuário reportou 98% de créditos Fable consumidos
+    - Investigação no JSONL bruto (`~/.claude/projects/.../ab393dc5-*.jsonl`): o último `tool_use` antes do silêncio era `Bash: ls /Users/criacao/.claude/agents/ 2>&1` — comando local trivial, sem I/O em OneDrive, que deveria retornar em milissegundos
+    - Não houve `tool_result` correspondente antes do gap de ~69 min; a mensagem de interrupção do usuário ("travou?") passou por um mecanismo de fila (`queue-operation: enqueue` → `popAll`) em vez de ser processada na hora
+    - A sessão tinha um marcador `bridge-session` (`bridgeSessionId`), sugerindo execução via relay/ponte — stall mais provável é na camada de transporte da ponte, não em processamento pesado ou lentidão do modelo
+    - **Lição geral**: quando uma sessão "trava", olhar o JSONL bruto e achar o ÚLTIMO `tool_use` sem `tool_result` correspondente. Se o comando travado é trivial (ex.: `ls` num diretório local), é sinal de falha de transporte/infra, não de carga de trabalho — não adianta esperar mais nem trocar de modelo, é preciso reiniciar a sessão
+    - **Onde**: nenhum código do projeto — é um padrão de diagnóstico via `~/.claude/projects/<projeto>/<session-id>.jsonl`

@@ -10,6 +10,12 @@ from pathlib import Path
 
 import click
 
+# Force UTF-8 output on Windows (cp1252 chokes on box-drawing chars and arrows)
+if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
 from .config import DATA_DIR, DB_PATH, EXPORTS_PATH, SESSIONS_ROOT
 from .database import Database
 from .embeddings import get_embedding_provider

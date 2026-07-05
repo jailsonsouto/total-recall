@@ -1,0 +1,228 @@
+AI Conversation
+Date: 2026-03-25 12:34:59
+-------------------------------------------
+
+You:
+Eu preciso de ajuda pra resolver um problema de lógica e programação. A busca do aplicativo que criei falha quando cometo erros de digitação, principalmente em nomes próprio, marcas de produto e termos técnicos (não usuais). 
+Quero que você leia com muita atenção o documento anexo. Ele pode nos ajudar a pensar outras estratégias e caminhos para resolver o problema da digitação equivocada ou incompleta no total-recall. Monte um estudo que avalie outros dois caminhos podem emergir para solucionar essas questões.
+Lembrando que a minha máquina onde roda o total-recall é uma Mac book pro m1 com 16gb ram. Considere também a capacidade de ser elegante e resistente na escolha da Stack, sem “supercomplicações”.
+
+-------------------------------------------
+
+ChatGPT:
+Li o estudo anexado e a principal mudança de chave é esta: o seu problema não é só “busca com typo tolerance ruim”; em muitos casos ele é resolução de entidades. O texto vai nessa direção ao defender fonética para nomes em PT-BR, ponderação por raridade dos tokens e cautela com embeddings puros quando o alvo é nome próprio, marca ou termo técnico muito parecido com outro. 
+
+Resolvendo Entidades em Bases G…
+
+Sobre o contexto do sistema, o anexo README.md.txt trouxe só um link para um caminho projetos/total-recall/README.md 
+
+projetos-total-recall-FREADME.md
+
+. No repositório público que consegui abrir, o projeto visível hoje é memoria-viva, com Hot Store em SQLite WAL, Warm Store em ChromaDB local e busca semântica no Memory Read; os ADRs reforçam uma preferência clara por latência local, zero configuração e uso individual. Usei esse desenho como proxy arquitetural porque ele parece ser o estado vivo da stack. 
+GitHub
++5
+GitHub
++5
+GitHub
++5
+
+A partir dessa leitura, eu vejo dois caminhos fortes.
+
+1) Resolver na consulta: busca híbrida lexical + fonética + reranking leve
+
+Esse é o caminho com melhor relação entre elegância, robustez e simplicidade para o seu M1. Em vez de trocar a arquitetura, eu adicionaria um sidecar local de busca em cima do que você já tem: um índice em SQLite FTS5 para recuperar candidatos por token e substring, uma normalização forte de texto, uma tabela de aliases, e um reranking em Python para escolher melhor entre os candidatos. O FTS5 oficial suporta virtual tables, prefix indexes e também um tokenizer trigram para substring matching; além disso, o tokenizer padrão pode remover diacríticos, o que ajuda muito em joão vs joao. Para o reranking, RapidFuzz é leve, rápido e portátil para Python. Isso encaixa bem com o que o estudo propõe: fonética para nomes, tolerância lexical para erros de digitação e peso baixo para tokens muito frequentes. 
+SQLite
++1
+ 
+
+Resolvendo Entidades em Bases G…
+
+Na prática, eu faria assim: a query entra, passa por normalização (lower, unaccent, colapso de espaços, remoção controlada de partículas fracas em campo auxiliar), depois consulta três sinais em paralelo: (a) FTS5 “normal” para token match, (b) FTS5 trigram para incompletude e truncamento, (c) chave fonética só para campos name-like. O top-K disso tudo é reranqueado com uma fórmula simples: similaridade lexical + match de alias + bônus fonético + peso por raridade do token. Esse “Soft-TFIDF-lite” é o que eu acho mais elegante no seu caso: você colhe a ideia central do estudo sem trazer uma stack inteira de ER para dentro da busca online. 
+SQLite
++1
+ 
+
+Resolvendo Entidades em Bases G…
+
+Eu não faria do spellfix1 a base do MVP, porque o próprio SQLite diz que ele é uma loadable extension e não faz parte do build padrão. Para uma stack que quer ser resistente e sem surpresas no Mac, isso vira acoplamento desnecessário. Se um dia quiser testar, deixe como opcional; o núcleo deveria ser FTS5 + aliases + fonética + rerank leve. 
+SQLite
+
+Minha avaliação desse caminho: aderência ao problema muito alta, complexidade baixa a média, explicabilidade alta, fit com o M1 excelente. Ele corrige bem digitação incompleta, falta de acento, erro pequeno de digitação e variação de escrita em nomes e marcas. O ponto fraco é que ele ainda depende de boas regras e de um pequeno trabalho de curadoria de aliases.
+
+2) Resolver na ingestão: registro canônico de entidades antes de indexar
+
+O segundo caminho é mais estrutural. Em vez de só consertar a consulta, você passa a canonizar as entidades quando a memória é gravada. Cada nome próprio, marca, produto ou termo técnico extraído do flush ganha um entity_id, um canonical_name, aliases, uma chave fonética e alguns tokens discriminativos. Depois, o Chroma e os demais stores deixam de guardar só texto bruto: passam a guardar também a referência para essa entidade canônica. A busca então vira: query crua -> alias provável -> entidade canônica -> memórias ligadas. Isso resolve o problema na raiz e tende a melhorar com o tempo. 
+GitHub
++1
+ 
+
+Resolvendo Entidades em Bases G…
+
+Para essa camada, entre as ferramentas citadas no estudo, eu escolheria Splink + DuckDB como primeira aposta. O Splink hoje se apresenta como record linkage probabilístico em Python, com ajuste por frequência de termo e lógica fuzzy configurável; a própria documentação destaca execução em laptop com DuckDB e escala bem acima do que você provavelmente terá no curto prazo. Dedupe continua sendo uma boa alternativa quando você quer aprendizado ativo com pares rotulados por humano, mas isso adiciona um ritual operacional que eu evitaria no começo. 
+Moj Analytical Services
++1
+ 
+
+Resolvendo Entidades em Bases G…
+
+Esse caminho conversa muito bem com a arquitetura atual, porque a Memória Viva já tem momentos de flush e coleções separadas no Warm Store. A diferença é que o write deixa de ser só “embedar texto” e passa a ser também “normalizar e ligar entidades”. O ganho é enorme em auditabilidade e estabilidade de busca; o custo é que você precisa estruturar melhor os dados de entrada e revisar clusters duvidosos. Minha avaliação: aderência alta, robustez de longo prazo muito alta, complexidade média, fit com o M1 bom se rodar em lote/offline, não no hot path. 
+GitHub
++2
+GitHub
++2
+
+O que eu escolheria no seu lugar
+
+Para a sua máquina, para os ADRs atuais e para o critério “elegante e resistente, sem supercomplicações”, eu faria assim:
+
+agora: manteria o ChromaDB para busca semântica ampla, mas colocaria na frente dele o Caminho 1 como camada obrigatória para queries “entity-like” — nomes, marcas, siglas, termos técnicos raros, consultas curtas e consultas com typo evidente.
+depois: acrescentaria o Caminho 2 para a memória ficar cada vez mais limpa e canônica.
+
+Em outras palavras: o Caminho 1 corrige o erro do usuário; o Caminho 2 corrige a memória para que o erro apareça cada vez menos.
+
+Eu não deixaria embeddings/Chroma decidirem sozinhos casos de nomes, marcas e termos técnicos, porque o estudo anexo é claro ao mostrar que a semântica aproxima entidades relacionadas, mas distintas — exatamente o tipo de colisão que estraga busca de precisão. No desenho atual da Memória Viva, a busca semântica faz sentido como recall semântico; ela não deveria ser a autoridade final para identidade textual. 
+GitHub
++1
+ 
+
+Resolvendo Entidades em Bases G…
+
+A stack enxuta que eu escolheria hoje seria:
+
+Python + SQLite (FTS5 sidecar) + RapidFuzz + ChromaDB, e depois
+Python + DuckDB + Splink para canonização offline.
+
+Eu não abriria Elasticsearch, Spark ou uma infra vetorial nova nessa fase.
+
+Como eu validaria isso sem virar projeto de infraestrutura
+
+Eu faria um experimento simples com um conjunto fechado de consultas reais:
+
+separar 3 classes: nomes próprios, marcas/produtos, termos técnicos;
+
+montar um conjunto de queries com erro real: acento ausente, letra trocada, truncamento, abreviação, apelido, alias;
+
+comparar três cenários: busca atual, Caminho 1, Caminho 1 + Caminho 2;
+
+medir Recall@5, MRR@10, taxa de falso positivo em quase-colisões e latência p95;
+
+aceitar a mudança só se o ganho vier junto com baixa regressão em precisão.
+
+Se ainda restarem ambiguidades duras depois disso, o único incremento neural que eu consideraria seria um reranker local pequeno sobre top-10 candidatos; SentenceTransformers hoje cobre embeddings e CrossEncoder/rerankers, e o PyTorch expõe mps no Mac, então isso é viável no M1. Mas eu deixaria isso como camada opcional, não como fundação do MVP. 
+Sbert
++1
+
+Minha síntese final: o melhor próximo passo é uma busca híbrida local em SQLite + reranking leve; a melhor evolução estrutural é uma camada canônica de entidades com Splink/DuckDB.
+
+-------------------------------------------
+
+You:
+Eita! Era para você ter lido o Markdown do projeto que fiz. Vou baixar o Markdown e documentação. É um projeto "primo-irmão" do memória viva. Já anexo! Deixa só ler o que você propôs aqui para não gastar tokens e o meu limite com você. 
+
+-------------------------------------------
+
+ChatGPT:
+Boa, você tem razão. Eu extrapolei pelo projeto primo-irmão, e isso pode puxar a recomendação para um lugar errado.
+
+Quando você anexar o README e a documentação do total-recall, eu refaço a análise em cima do projeto certo e reviso o que propus com foco em três coisas: onde a busca falha hoje, dois caminhos alternativos compatíveis com o M1 / 16 GB, e a stack mais elegante e resistente sem inflar a complexidade.
+
+Do que eu escrevi, a parte que provavelmente ainda se aproveita é só a lógica geral de separar:
+
+recuperação de candidatos
+
+desambiguação/ranqueamento final
+
+Mas o resto eu reancoro no seu código e na arquitetura real assim que os arquivos entrarem.
+
+-------------------------------------------
+
+You:
+
+
+-------------------------------------------
+
+ChatGPT:
+Agora com o README certo, eu mudaria o parecer: o Total Recall já tem uma arquitetura boa para memória semântica, mas o ponto cego dele para erro de digitação está muito claro. Hoje ele faz chunking por exchange, embute com Qwen3, guarda tudo em SQLite WAL com sqlite-vec e FTS5/BM25, busca em modo híbrido 70% vetorial + 30% keyword, e ainda aplica temporal decay, MMR e fallback para FTS-only quando o Ollama não está disponível. Isso é ótimo para perguntas abertas do tipo “como decidimos X?”, mas não é naturalmente forte para consultas curtas e ruidosas com nome próprio, marca, sigla ou termo técnico raro. 
+
+README-total_recall
+
+O estudo anexo ajuda a enquadrar isso do jeito certo: esse problema se parece menos com “melhorar embedding” e mais com resolução de entidades. Em nomes, marcas e termos raros, entram com muito mais peso normalização, fonética, blocking e peso por raridade do token; embeddings puros tendem a aproximar coisas semanticamente relacionadas, mas não necessariamente idênticas. Isso é exatamente o tipo de confusão que aparece quando a query vem com typo, truncamento ou forma alternativa de escrita. 
+
+Resolvendo Entidades em Bases G…
+
+A minha leitura, então, é que dois caminhos fortes emergem para o total-recall. O primeiro ataca a falha na consulta. O segundo ataca a falha na indexação.
+
+Caminho 1: fortalecer a trilha lexical dentro do SQLite
+
+Esse é o caminho mais natural para o projeto como ele existe hoje. A ideia é manter a arquitetura geral, mas criar uma via de recuperação especializada para queries “entity-like”. O FTS5 já suporta prefix queries, o tokenizer unicode61 com remoção de diacríticos e tokenchars, e também um tokenizer trigram, que permite substring matching. Isso casa muito bem com entradas incompletas, sem acento, com hífen/underscore ou com token técnico truncado. Para o reranking dos candidatos, o RapidFuzz já oferece métricas como Levenshtein, Jaro e Jaro-Winkler com implementação otimizada. 
+RapidFuzz
++4
+SQLite
++4
+SQLite
++4
+
+Na prática, eu faria quatro mudanças. Primeiro, normalização forte na query e nos termos indexados: lowercase, remoção de acento, split de camelCase, snake_case e kebab-case, mais aliases úteis como pgvector⇄pg vector, sqlite-vec⇄sqlite vec, session_id⇄session id. Segundo, manteria o FTS5 atual para token match, mas adicionaria uma tabela auxiliar para prefix/substr em cima de formas normalizadas e aliases. Terceiro, para nomes de pessoa em PT-BR, eu adicionaria uma chave fonética no estilo Metaphone-ptBR, mas só nesse subtipo de busca, não no corpus todo. Quarto, eu deixaria o score dinâmico por intenção: se a query for curta, com dígitos, pontuação, sigla ou token raro, o peso lexical/fuzzy sobe e o peso vetorial cai. Isso encaixa direto nos módulos que o README lista: session_parser.py, database.py, vector_store.py e recall_engine.py.
+
+O detalhe mais importante aqui é que eu não manteria o mesmo ranking global para todos os tipos de query. Em busca semântica aberta, o desenho atual do README faz sentido. Em busca de entidade, eu reduziria temporal decay e MMR, porque nesses casos a prioridade é achar o item certo mesmo que ele seja antigo ou que vários resultados pareçam parecidos. Hoje, parte do hit correto pode estar perdendo posição não só pelo typo, mas também por ter sido tratado como “resultado semântico comum”. 
+
+README-total_recall
+
+Esse caminho é o mais elegante no seu contexto por três razões. Ele respeita a filosofia do projeto — um banco local, sem serviço extra —, melhora inclusive o modo FTS-only do graceful degradation, e é o mais explicável quando algo dá errado. Em M1 com 16 GB, isso roda com folga porque o custo adicional está concentrado em índices de texto e reranking leve, não em um novo servidor nem em uma nova família de modelos. 
+
+README-total_recall
+
+Eu também não usaria spellfix1 como base do MVP. Ele é útil para sugerir correções de vocabulário, mas a própria documentação do SQLite diz que é uma loadable extension, fora do build padrão. Para um projeto que quer ser resistente e simples de instalar no Mac, eu prefiro RapidFuzz sobre um vocabulário local de aliases e termos raros antes de depender disso. 
+SQLite
++1
+
+Minha avaliação do Caminho 1: é o melhor primeiro passo. Baixa a média complexidade, alto ganho esperado, excelente aderência ao desenho atual do total-recall.
+
+Caminho 2: criar uma camada de entidades canônicas na indexação
+
+Aqui a pergunta deixa de ser apenas “como encontrar melhor?” e passa a ser “como indexar de um jeito que a entidade sobreviva às variações de escrita?”. Em vez de depender só da query, você passa a construir uma memória auxiliar de entidades durante o index: nomes próprios, pacotes, bibliotecas, marcas, comandos, paths, identificadores, siglas e termos incomuns viram registros com canonical_name, aliases, forma normalizada, frequência e, quando fizer sentido, chave fonética. Depois, a busca tenta resolver a query para uma ou mais entidades e usa isso para puxar os chunks relacionados.
+
+Esse caminho transplanta bem a lógica do estudo anexo, mas com uma adaptação importante: não aplicar ER em chunks brutos. O total-recall trabalha com texto livre de sessões, não com cadastro estruturado. Então o lugar certo para record linkage não é a tabela de chunks; é uma tabela derivada de surface forms extraídas do corpus. Você primeiro extrai candidatos de alto valor, depois deduplica/agrupa esses candidatos, e só então liga os grupos de volta aos chunks. Isso mantém o runtime limpo e evita transformar a busca num mini-MDM.
+
+Se você quiser framework nessa rota, eu usaria Splink offline, não no hot path. A documentação do Splink o posiciona como biblioteca de record linkage probabilístico, com DuckDB e SQLite já empacotados; ela também mostra uso de algoritmos fonéticos, Jaro/Jaro-Winkler e term-frequency adjustments em comparações e regras de blocking. E o DuckDB continua dentro da filosofia local/embarcada, operando com arquivo persistente ou em memória, sem exigir servidor dedicado. 
+DuckDB
++4
+Moj Analytical Services
++4
+Moj Analytical Services
++4
+
+Arquiteturalmente, isso pediria algo como entities, entity_aliases e chunk_entities no banco; extração de surface forms no session_parser.py/indexer.py; e um passo opcional de rebuild-entities para reagrupamento offline. O ganho é que, depois de aprendida, uma variação deixa de ser resolvida toda vez em tempo de busca. O custo é maior: mais esquema, mais manutenção e risco de false merge se o clustering ficar agressivo demais.
+
+Minha avaliação do Caminho 2: ele é o melhor caminho estrutural de médio prazo, mas eu o trataria como evolução do Caminho 1, não como substituto imediato.
+
+O que eu não escolheria agora
+
+Eu não atacaria isso trocando embedding, aumentando dimensão ou sofisticando o eixo vetorial. O README já mostra que o projeto foi desenhado como híbrido justamente para o vetor não carregar tudo sozinho, e o estudo anexo reforça que embeddings não são a melhor autoridade para distinguir entidades raras e quase-colisões. Além disso, o próprio sqlite-vec hoje se apresenta como pre-v1, então eu evitaria acoplar ainda mais a solução de typo ao lado vetorial. 
+GitHub
+
+Também deixaria Cross-Encoder como camada opcional futura, não como um dos dois caminhos principais. A documentação do Sentence Transformers é explícita ao colocá-lo como segunda etapa de re-ranking sobre um conjunto pequeno de candidatos: ele melhora a ordenação, mas é lento para varrer coleções grandes. Em Apple Silicon isso é viável localmente porque o PyTorch expõe o backend mps, então cabe no seu M1 — mas só depois que a geração de candidatos já estiver boa. Reranker não salva candidato que nunca entrou no top-K. 
+Sbert
++1
+
+Minha recomendação final
+
+Para o total-recall, na sua máquina e com a sua exigência de elegância sem supercomplicação, eu seguiria esta ordem:
+
+Implementar o Caminho 1 agora: trilha lexical robusta em SQLite, normalização forte, aliases, fuzzy rerank leve e modo especial para queries entity-like.
+
+Preparar o schema para o Caminho 2: já deixar espaço para entities e entity_aliases, mas sem ligar clustering avançado no primeiro ciclo.
+
+Só depois avaliar um reranker local pequeno, se ainda houver erro de ordenação no topo.
+
+Em uma frase: o melhor próximo passo é consertar a recuperação lexical; a melhor evolução estrutural é canonizar entidades na indexação. Para o seu caso, eu escolheria a stack assim:
+
+agora: Python + SQLite/FTS5 + RapidFuzz + a stack atual do total-recall
+depois: uma camada offline de entidades canônicas, idealmente ainda local, com DuckDB/Splink só se realmente precisar de clustering probabilístico.
+
+Na prova de conceito, eu mediria quatro números separados: candidate recall, MRR@10, taxa de falso positivo em quase-colisões e latência p95. O número mais importante é o primeiro, porque typo tolerance morre antes do reranking: se o candidato certo não entra, o resto não importa.
+
+No próximo passo, eu transformo isso em um plano de implementação por arquivo do projeto, com mudanças sugeridas em database.py, vector_store.py, recall_engine.py e session_parser.py.
+
+-------------------------------------------
+
