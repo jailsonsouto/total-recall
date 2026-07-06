@@ -186,7 +186,7 @@ def index(full, subagents):
 @click.option("--limit", "-n", default=5, help="Número de resultados")
 @click.option("--session", "-s", default=None, help="Filtrar por session ID")
 @click.option("--format", "-f", "fmt",
-              type=click.Choice(["rich", "context", "json"]),
+              type=click.Choice(["rich", "context", "pointers", "json"]),
               default="rich", help="Formato de saída")
 @click.option("--output", "-o", default=None,
               help="Salva resultado em arquivo Markdown (clipping)")
@@ -204,6 +204,11 @@ def search(query, limit, session, fmt, output):
 
     if fmt == "context":
         content = ctx.format_for_context()
+        click.echo(content)
+        if output:
+            _save_clip(query, content, output)
+    elif fmt == "pointers":
+        content = ctx.format_pointers()
         click.echo(content)
         if output:
             _save_clip(query, content, output)

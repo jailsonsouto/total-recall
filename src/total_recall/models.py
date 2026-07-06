@@ -140,6 +140,75 @@ class RecallContext:
 
         return "\n".join(lines)
 
+    def format_pointers(self, max_full_sessions: int = 4) -> str:
+        """Formato ponteiro guiado por sessão (estudo empírico 2026-07-05):
+        cita na íntegra o melhor hit (primeiro no ranking) de cada sessão
+        distinta, até `max_full_sessions` sessões; hits repetidos de sessões
+        já citadas — e sessões além do teto — viram ponteiros de 1 linha.
+        Racional: o rank sozinho não prediz utilidade (evidência nova aparece
+        nos ranks 4-8); sessão ainda não representada, sim."""
+        if not self.results:
+            return self.format_for_context()
+
+        quoted_sessions: set = set()
+        full: list = []
+        rest: list = []
+        for idx, r in enumerate(self.results, 1):
+            if (r.session_id not in quoted_sessions
+                    and len(quoted_sessions) < max_full_sessions):
+                quoted_sessions.add(r.session_id)
+                full.append((idx, r))
+            else:
+                rest.append((idx, r))
+
+        lines = [
+            f"## Resultados para: \"{self.query}\"",
+            f"*{len(self.results)} resultados de "
+            f"{self.sessions_searched} sessões indexadas — melhor hit de "
+            f"{len(full)} sessão(ões) citado na íntegra, restante como ponteiros*\n",
+        ]
+
+        expansions = self.query_info.get("expansions", [])
+        if expansions:
+            exp_parts = []
+            for exp in expansions:
+                label = "fuzzy" if exp["type"] == "fuzzy" else "abrev"
+                targets = ", ".join(exp["expanded"][:3])
+                exp_parts.append(f"{label}: {exp['original']} → {targets}")
+            lines.append(f"*Expansões: {'; '.join(exp_parts)}*\n")
+
+        highlight_terms = self._collect_highlight_terms()
+
+        for i, r in full:
+            ts = r.timestamp.strftime("%d/%m/%Y %H:%M") if r.timestamp else "?"
+            sources_str = " + ".join(s.upper() for s in r.sources) if r.sources else "?"
+            lines.append(f"### [{i}] {r.project_label} — {r.session_title}")
+            lines.append(
+                f"*Sessão `{r.session_id[:8]}` | {ts} | "
+                f"score: {r.score:.3f} | {sources_str}*"
+            )
+            lines.append(f"\n{highlight_text(r.content, highlight_terms, mode='markdown')}\n")
+            lines.append("---\n")
+
+        if rest:
+            lines.append("### Ponteiros (drill-down sob demanda)")
+            for i, r in rest:
+                ts = r.timestamp.strftime("%d/%m/%Y") if r.timestamp else "?"
+                preview = r.content[:120].replace("\n", " ")
+                if len(r.content) > 120:
+                    preview += "…"
+                repeat = " (sessão já citada)" if r.session_id in quoted_sessions else ""
+                lines.append(
+                    f"- [{i}] `{r.session_id[:8]}`{repeat} | {ts} | {r.score:.2f} | "
+                    f"{r.project_label} — {preview}"
+                )
+            lines.append(
+                f"\n*Para expandir um ponteiro: "
+                f"`total-recall search \"{self.query}\" --session <id> --format context`*"
+            )
+
+        return "\n".join(lines)
+
     def _collect_highlight_terms(self) -> list[str]:
         """Coleta termos para highlighting a partir da query e expansões."""
         terms = set()
