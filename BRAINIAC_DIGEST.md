@@ -1,8 +1,30 @@
 # BRAINIAC DIGEST — total-recall
-Data: 2026-07-05T22:36:39+00:00
-Modelo: claude-sonnet-4-6
+Data: 2026-07-05 (atualizado — sessão Fable 5)
+Modelo: claude-sonnet-4-6 / claude-sonnet-5 (sessão de arrumação)
 
 Projeto: `/Users/criacao/Desktop/Projetos-IA/total-recall`
+
+## Sessão 2026-07-05 (Fable 5)
+
+- `--format pointers` no CLI (`models.py::format_pointers` + `cli.py`) com dedupe por
+  sessão: cita na íntegra o melhor hit de cada sessão distinta (até 4), resto vira
+  ponteiro de 1 linha. 17 testes passando.
+- Estudo empírico (5 buscas reais re-executadas) com 2 achados-chave: (1) o rank NÃO
+  prediz utilidade — evidência real aparece até no rank 8, o preditor é sessão nova; (2)
+  o índice está AUTO-CONTAMINADO com eco do próprio `/recall` (comandos ecoados,
+  task-notifications indexados como conteúdo).
+- Skills `/recall` (sub-agente Haiku com fallback Sonnet, pré-cheque visível de
+  evidência, síntese por sessão distinta, alvo 300/teto 450 palavras) e `/maestro`
+  (reconciliação nomeada de conflito narrativa×fatos) atualizadas fora do repo, em
+  `~/.claude/skills/`.
+- Bug de deploy corrigido: pip de `~/.venvs/total-recall-py312/bin` apontava para o venv
+  do codex; binário instalado estava congelado desde 16/maio. Fluxo correto documentado
+  no `APRENDIZADOS.md` (rsync para `~/.local/share/total-recall-app` + `python -m pip
+  install --no-cache-dir`).
+- Detalhes completos: `docs/PLANO-ADVISOR-FASTCONTEXT-2026-07-05.md`; aprendizados
+  23-27 no `APRENDIZADOS.md`.
+- **Próximo passo:** ver `docs/BACKLOG-PROXIMAS-SESSOES.md` (item 1: filtro de
+  auto-contaminação).
 
 ## Fontes lidas
 - `APRENDIZADOS.md`

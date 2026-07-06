@@ -349,3 +349,38 @@
     - A sessão tinha um marcador `bridge-session` (`bridgeSessionId`), sugerindo execução via relay/ponte — stall mais provável é na camada de transporte da ponte, não em processamento pesado ou lentidão do modelo
     - **Lição geral**: quando uma sessão "trava", olhar o JSONL bruto e achar o ÚLTIMO `tool_use` sem `tool_result` correspondente. Se o comando travado é trivial (ex.: `ls` num diretório local), é sinal de falha de transporte/infra, não de carga de trabalho — não adianta esperar mais nem trocar de modelo, é preciso reiniciar a sessão
     - **Onde**: nenhum código do projeto — é um padrão de diagnóstico via `~/.claude/projects/<projeto>/<session-id>.jsonl`
+
+## 2026-07-05 — Advisor tool, FastContext e estudo empírico do formato de resposta
+
+23. **O rank não prediz utilidade nos resultados do recall — sessão nova prediz**
+    - Estudo empírico (5 últimas buscas reais re-executadas com `--limit 8 --format json`)
+    - Em 3/5 queries, evidência não-redundante apareceu nos ranks 4-8 (num caso, o alerta
+      crítico estava no rank 8); ruído e substância vêm intercalados
+    - Corte cego "top-3 + ponteiros" seria regressão; o corte certo é dedupe por sessão
+    - **Onde**: `models.py::format_pointers` (dedupe por sessão), skill /recall (síntese
+      por sessão distinta), `docs/PLANO-ADVISOR-FASTCONTEXT-2026-07-05.md` §3
+
+24. **O índice está se auto-contaminando com eco do próprio /recall**
+    - Comandos `total-recall search` ecoados, "busca em segundo plano" e task-notifications
+      viram chunks e rankeiam alto nas buscas seguintes
+    - Mitigação provisória: regra de descarte no prompt do sub-agente do /recall
+    - Fix definitivo pendente: filtro de padrões de eco no `session_parser.py`
+      (backlog em `docs/PLANO-ADVISOR-FASTCONTEXT-2026-07-05.md` §4.1)
+
+25. **Bug de deploy: o binário instalado estava congelado desde 16/maio**
+    - O `pip` de `~/.venvs/total-recall-py312/bin/` aponta para o venv do CODEX
+      (`total-recall-codex-py312`) — instalações por ele nunca chegavam ao venv certo
+    - Agravantes: wheel em cache do pip e `build/` obsoleto na cópia de deploy
+    - Fluxo correto: `rsync src/ → ~/.local/share/total-recall-app/src/` e depois
+      `~/.venvs/total-recall-py312/bin/python -m pip install --no-cache-dir --force-reinstall --no-deps ~/.local/share/total-recall-app`
+    - Sintoma para detectar recorrência: mudança no código não aparece no CLI
+
+26. **Advisor tool (Anthropic) não é utilizável de dentro de skills do Claude Code**
+    - É server tool da Messages API; skills não controlam o array de tools do harness
+    - Aproveitamos só os padrões de prompt (reconciliação nomeada, cap de output,
+      coletor-barato/julgador-forte) — detalhes no plano em docs/
+
+27. **FastContext (Microsoft) validou o desenho do /recall e tem modelos públicos**
+    - `microsoft/FastContext-1.0-4B-{SFT,RL}` (MIT) + GGUFs prontos para Ollama
+    - Treinado para explorar código, não transcripts — não substitui o total-recall
+    - Experimento futuro (explorador de código local) registrado no plano §4.3
