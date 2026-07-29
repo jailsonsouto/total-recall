@@ -154,18 +154,22 @@ def status():
 
 @main.command()
 @click.option("--full", is_flag=True, help="Reindexar tudo (ignora hashes)")
-@click.option("--subagents/--no-subagents", default=False,
-              help="Incluir sessões de subagentes")
+@click.option("--subagents/--no-subagents", default=None,
+              help="Incluir sessões de subagentes (padrão: variável TOTAL_RECALL_INDEX_SUBAGENTS)")
 def index(full, subagents):
     """Indexa sessões (incremental por padrão)."""
+    from .config import INDEX_SUBAGENTS
     from .indexer import Indexer
     from .session_discovery import SessionDiscovery
     from .vector_store import SQLiteVectorStore
 
+    # Usa a flag do CLI, ou default da config se não especificada
+    include_subagents = subagents if subagents is not None else INDEX_SUBAGENTS
+
     db = Database()
     provider = get_embedding_provider()
     vector_store = SQLiteVectorStore(db, provider)
-    discovery = SessionDiscovery(SESSIONS_ROOT, db, include_subagents=subagents)
+    discovery = SessionDiscovery(SESSIONS_ROOT, db, include_subagents=include_subagents)
 
     indexer = Indexer(db, vector_store, provider, discovery)
     report = indexer.index(full=full)

@@ -384,3 +384,37 @@
     - `microsoft/FastContext-1.0-4B-{SFT,RL}` (MIT) + GGUFs prontos para Ollama
     - Treinado para explorar código, não transcripts — não substitui o total-recall
     - Experimento futuro (explorador de código local) registrado no plano §4.3
+
+## 2026-07-29 — /btw é inelegível para indexação: efêmero por design, sem hook
+
+50. **`/btw` (side-question panel) não deixa rastro capturável — não é lacuna do parser, é design deliberado**
+    - Confirmado via doc oficial (`code.claude.com/docs/en/interactive-mode.md`): "side questions don't become part of the permanent conversation history" — resposta é descartada, não persistida em JSONL nem em arquivo separado
+    - Confirmado empiricamente: nenhuma entrada com `isSidechain: true`, nenhum `type` novo, nenhum diretório `~/.claude/btw/` nos 121 transcripts locais
+    - Confirmado que não há hook disponível: `/btw` é processado inteiramente client-side (overlay da UI), não dispara `UserPromptSubmit`, `Stop`, `SubagentStop` nem nenhum dos 24 hook events documentados — bypassa o pipeline de eventos que geraria dados capturáveis
+    - Doc de sub-agents contrasta explicitamente: `/btw` "sees your full context but has no tool access, and the answer is discarded rather than added to history" — é o oposto de um subagent, não uma sessão paralela indexável
+    - **Único caminho de persistência existente**: a tecla `f` no overlay do `/btw` forka a pergunta+resposta para o histórico real da sessão como turns normais `user`/`assistant` — quando isso acontece, o `session_parser.py` já indexa automaticamente, sem precisar de nenhuma mudança de código
+    - **Onde**: nenhum código do projeto — decisão de não implementar, documentada aqui para não re-investigar no futuro se o pedido voltar
+
+## 2026-07-29 — Indexação de subagentes: bug do isSidechain, filtro de ruído e lock contention
+
+51. **`isSidechain: true` nunca aparece intercalado em arquivo de sessão principal — só existe em arquivos dedicados `.../subagents/agent-*.jsonl`, onde é 100% do conteúdo**
+    - O parser filtrava `isSidechain=True` incondicionalmente em `_build_chunks()` e `_extract_session_info()`, pensado para excluir conteúdo redundante intercalado
+    - Verificação empírica em 380 arquivos JSONL (121 sessões principais + subagentes): 14.868 entradas `isSidechain=true`, TODAS dentro de arquivos de subagente, ZERO intercaladas em sessão principal
+    - Resultado: mesmo com `total-recall index --subagents` (flag já existia, mas morta), todo arquivo de subagente gerava 0 chunks — confirmado num arquivo real (16 mensagens → 0 chunks antes do fix, 14 chunks depois)
+    - Fix: filtro condicional a `"subagent" in str(file_path)` — dentro de arquivo de subagente, isSidechain=true é indexado normalmente
+    - **Onde**: `session_parser.py` (`_is_subagent_file`, `_extract_session_info`, `_build_chunks`)
+
+52. **Metadados `attributionSkill`/`attributionAgent` no JSONL identificam de qual skill/tipo de agente veio um subagente — essencial para filtrar ruído**
+    - Cada entrada de arquivo de subagente carrega `attributionAgent` (general-purpose, Explore, fork, claude-code-guide, Plan) e `attributionSkill` (recall, brainiac, opsx:apply, modo-tcc, ...) quando disparado de dentro de uma skill
+    - Achado: quase metade dos subagentes do usuário (496 de ~1000 mensagens) vêm da skill `/recall` — eco de buscas e sínteses, exatamente o ruído de auto-contaminação já documentado no item 24 (2026-07-05)
+    - Fix: `SessionDiscovery._scan_subagent_file()` calcula hash e detecta `attributionSkill in {"recall"}` numa única passada; arquivos ruidosos são pulados antes mesmo de entrar no pipeline de parse
+    - Bônus: os mesmos campos alimentam o título de fallback (`Subagent {agent} ({skill})`) em `session_parser.py`, melhorando a legibilidade dos resultados de busca
+    - **Onde**: `session_discovery.py` (`_NOISE_ATTRIBUTION_SKILLS`, `_scan_subagent_file`), `session_parser.py` (título)
+
+53. **Embedding (chamada de rede ao Ollama) dentro de uma transação SQLite de escrita é uma bomba-relógio de lock contention**
+    - `indexer.py::_index_single_file` abre `with self.db.transaction()` e, para CADA chunk, chama `vector_store.add(..., _conn=conn)`, que gera o embedding via Ollama dentro da MESMA transação — o lock de escrita fica preso pela duração de N chamadas de rede, não de N inserts locais
+    - `database.py::_get_connection` não definia `timeout` no `sqlite3.connect()` → default do Python é 5s
+    - Sintoma real: reindex de subagentes em background (arquivos com até 32 chunks, várias dezenas de segundos de lock) colidiu com `total-recall index` manual do usuário em outro terminal → `sqlite3.OperationalError: database is locked`, comando abortou sem escrever nada (sem corrupção, só falha de aquisição de lock)
+    - Fix aplicado (rápido, seguro): `timeout=60.0` no `sqlite3.connect()` — segundo escritor espera em vez de falhar na hora
+    - **Fix estrutural pendente (não aplicado ainda)**: separar a resolução de embedding (rede, pode ser lenta) da transação de escrita (deveria ser só inserts locais, rápidos) — reduziria a janela de lock de "segundos-minutos" para "milissegundos" e tornaria o timeout de 60s quase nunca necessário. Ganhou mais urgência porque os hooks agora rodam `--subagents` (runs mais pesados) em todo SessionStart/PreCompact — duas sessões do Claude Code abrindo perto uma da outra colidem com mais frequência
+    - **Onde**: `database.py:_get_connection` (fix aplicado), `indexer.py:_index_single_file` + `vector_store.py:add/_embed_with_cache` (fix estrutural pendente)

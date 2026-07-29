@@ -178,6 +178,12 @@ class SessionParser:
         self.file_path = file_path
         self._entries: list[dict] = []
         self._line_map: dict[str, int] = {}  # uuid → line number
+        # Arquivos dedicados de subagente (.../subagents/agent-*.jsonl) marcam
+        # TODAS as próprias entradas como isSidechain=true — o campo não indica
+        # "conteúdo redundante" ali, indica "isto é uma sidechain própria".
+        # Confirmado empiricamente: isSidechain=true nunca aparece intercalado
+        # dentro de um arquivo de sessão principal, só em arquivos de subagente.
+        self._is_subagent_file = "subagent" in str(file_path)
 
     def parse(self) -> tuple[SessionInfo, list[Chunk]]:
         """Retorna (metadados da sessão, lista de chunks)."""
@@ -213,9 +219,14 @@ class SessionParser:
         ended_at = None
         user_count = 0
         asst_count = 0
+        attribution_agent = None
+        attribution_skill = None
 
         for e in self._entries:
             etype = e.get("type", "")
+            # Em arquivo de subagente, isSidechain=true é o normal (é a própria
+            # natureza do arquivo) — não deve ser tratado como "descartar".
+            is_countable = self._is_subagent_file or not e.get("isSidechain")
 
             if etype == "system" and not session_id:
                 session_id = e.get("sessionId", "")
@@ -224,10 +235,15 @@ class SessionParser:
             if etype == "custom-title" and not title:
                 title = e.get("title", "")
 
-            if etype == "user" and not e.get("isSidechain"):
+            if etype == "user" and is_countable:
                 user_count += 1
-            if etype == "assistant" and not e.get("isSidechain"):
+            if etype == "assistant" and is_countable:
                 asst_count += 1
+
+            if not attribution_agent and e.get("attributionAgent"):
+                attribution_agent = e["attributionAgent"]
+            if not attribution_skill and e.get("attributionSkill"):
+                attribution_skill = e["attributionSkill"]
 
             ts = _parse_timestamp(e.get("timestamp", ""))
             if ts:
@@ -243,7 +259,12 @@ class SessionParser:
 
         # Fallback title
         if not title:
-            title = f"Sessão {session_id[:8]}"
+            if self._is_subagent_file and attribution_agent:
+                title = f"Subagent {attribution_agent}"
+                if attribution_skill:
+                    title += f" ({attribution_skill})"
+            else:
+                title = f"Sessão {session_id[:8]}"
 
         return SessionInfo(
             session_id=session_id,
@@ -285,11 +306,13 @@ class SessionParser:
           1. Exchanges (user + assistant text) — conteúdo principal
           2. Blocos seletivos (thinking/tool_result com marcadores) — contexto extra
         """
-        # Filtra user/assistant, ordena por timestamp, exclui sidechains
+        # Filtra user/assistant, ordena por timestamp.
+        # Exclui sidechains SÓ em arquivos de sessão principal — em arquivo de
+        # subagente, isSidechain=true é a totalidade do conteúdo útil (ver __init__).
         messages = [
             e for e in self._entries
             if e.get("type") in ("user", "assistant")
-            and not e.get("isSidechain", False)
+            and (self._is_subagent_file or not e.get("isSidechain", False))
         ]
         messages.sort(key=lambda x: x.get("timestamp", ""))
 

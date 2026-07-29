@@ -49,7 +49,11 @@ class Database:
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path))
+        # timeout alto: writers concorrentes (ex.: hooks SessionStart de duas
+        # sessões abrindo perto uma da outra) esperam a transação em andamento
+        # em vez de falhar com "database is locked" — o default do sqlite3 (5s)
+        # é curto demais quando a transação inclui chamadas de embedding (Ollama)
+        conn = sqlite3.connect(str(self.db_path), timeout=60.0)
         conn.row_factory = sqlite3.Row
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)

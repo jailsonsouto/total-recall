@@ -7,12 +7,18 @@ novos ou alterados via SHA-256 hash.
 """
 
 import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from .config import SESSIONS_ROOT
 from .database import Database
+
+# Subagentes disparados por estas skills são majoritariamente eco de busca/
+# síntese (comandos e resultados brutos ecoados) — ruído de auto-contaminação
+# já documentado em APRENDIZADOS.md. Excluídos da indexação de subagentes.
+_NOISE_ATTRIBUTION_SKILLS = {"recall"}
 
 
 @dataclass
@@ -49,8 +55,14 @@ class SessionDiscovery:
             if is_subagent and not self.include_subagents:
                 continue
 
+            if is_subagent:
+                file_hash, is_noise = self._scan_subagent_file(jsonl_path)
+                if is_noise:
+                    continue
+            else:
+                file_hash = self._compute_file_hash(jsonl_path)
+
             parent_sid = self._detect_parent_session(jsonl_path)
-            file_hash = self._compute_file_hash(jsonl_path)
             file_size = jsonl_path.stat().st_size
             project_dir = self._get_project_dir(jsonl_path)
             status = self._check_status(str(jsonl_path), file_hash, file_size)
@@ -79,6 +91,27 @@ class SessionDiscovery:
             for block in iter(lambda: f.read(8192), b""):
                 h.update(block)
         return h.hexdigest()
+
+    def _scan_subagent_file(self, path: Path) -> tuple[str, bool]:
+        """Calcula hash e detecta ruído de atribuição numa única passada.
+
+        Retorna (file_hash, is_noise). is_noise=True se qualquer entrada do
+        arquivo tiver attributionSkill em _NOISE_ATTRIBUTION_SKILLS.
+        """
+        h = hashlib.sha256()
+        is_noise = False
+        with open(path, "rb") as f:
+            for raw_line in f:
+                h.update(raw_line)
+                if is_noise:
+                    continue
+                try:
+                    entry = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("attributionSkill") in _NOISE_ATTRIBUTION_SKILLS:
+                    is_noise = True
+        return h.hexdigest(), is_noise
 
     def _get_project_dir(self, path: Path) -> str:
         """Extrai o diretório de projeto relativo à raiz."""
