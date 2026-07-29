@@ -146,6 +146,19 @@ total-recall index --full             # Reindexação completa (necessário ao t
 total-recall index --subagents        # Inclui sessões de subagentes (excluídas por padrão)
 ```
 
+**Subagentes por padrão:** configure para não precisar de `--subagents` toda vez:
+
+```bash
+export TOTAL_RECALL_INDEX_SUBAGENTS=true
+total-recall index  # já inclui subagentes automaticamente
+```
+
+**O que é indexado de subagentes:** apenas subagentes significativos. Excluídos automaticamente:
+- Subagentes disparados pela skill `/recall` (eco de buscas/sínteses — ruído auto-contaminação)
+- Subagentes capturados com `attributionSkill` em uma lista de skills ruidosas
+
+Confirmado via análise empírica (APRENDIZADOS.md #52): quase metade dos subagentes do usuário típico vêm da `/recall`, tornando a filtragem essencial.
+
 ### Busca no terminal
 
 ```bash
@@ -212,15 +225,24 @@ total-recall status
 ```
 ~/.claude/projects/**/*.jsonl
          │
-         ▼ total-recall index
+         ▼ total-recall index [--subagents]
+         │
+         ├─ Discovery com fast-path (stat mtime vs SHA-256, 145 arquivos em 0.028s)
          │
          ├─ Parser JSONL → exchanges + blocos seletivos (thinking, tool_result)
+         │   └─ Subagentes: isSidechain=true é normal (não descartado em arquivo de subagente)
+         │
          ├─ Chunking exchange-based com overlap de 200 chars
-         ├─ Embedding qwen3-embedding:4b (1024 dims, instruction-aware)
-         └─ SQLite WAL
+         │
+         ├─ Embedding batched qwen3-embedding:4b (1024 dims, instruction-aware)
+         │   └─ Lotes de 24 textos reduzem ~1000ms/chunk → ~110-150ms/chunk
+         │
+         └─ SQLite WAL (timeout 60s para evitar lock contention de writers concorrentes)
                 ├─ chunks_vec  (sqlite-vec: busca vetorial cosine)
                 └─ chunks_fts  (FTS5/BM25: busca por keywords)
 ```
+
+**Nota de concorrência:** embeddings são gerados via Ollama dentro da transação de escrita. Hooks `SessionStart` e `PreCompact` podem dispará-lo em paralelo. O timeout de 60 segundos evita "database is locked" quando duas sessões abrem perto uma da outra. Fix estrutural (separar embedding da transação) está no backlog.
 
 ### Pipeline de busca
 
