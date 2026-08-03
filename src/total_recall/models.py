@@ -118,18 +118,27 @@ def preview_window(content: str, priority_terms: list[str],
     """Janela de preview centralizada no(s) termo(s) encontrado(s) — não
     sempre `content[:width]`.
 
-    Busca primeiro em `priority_terms` (a query literal); só cai para
-    `fallback_terms` (expansões fuzzy/abreviação, que podem ser ruidosas)
-    se nenhum termo literal aparecer no conteúdo. Se nada aparecer, faz
-    fallback para o comportamento antigo (começa do caractere 0) — melhor
-    mostrar algo do chunk do que nada.
+    Busca primeiro em `priority_terms` (a query literal). Se NENHUM termo
+    literal aparecer, cai para `fallback_terms` (expansões fuzzy/abreviação,
+    que sozinhas podem ser ruidosas — daí só decidirem a janela quando não
+    há nenhuma âncora literal). Se nada aparecer, faz fallback para o
+    comportamento antigo (começa do caractere 0) — melhor mostrar algo do
+    chunk do que nada.
 
-    Quando mais de um termo distinto aparece no conteúdo, tenta expandir a
-    janela (até `max_width`, padrão 2×`width`) pra cobrir do primeiro ao
-    último — um chunk com "duckdb" e "analista" a 400 chars de distância
-    ainda é um match completo, mas uma janela fixa de largura `width`
-    centralizada só no primeiro termo esconderia o segundo, fazendo o
-    resultado parecer parcial mesmo sendo genuíno. Se os termos estiverem
+    Quando pelo menos um termo literal já ancora a janela, `fallback_terms`
+    também entra — não pra decidir sozinho onde centralizar, mas pra
+    ESTENDER uma janela já legítima. Achado real: query "buscla vetorial"
+    (typo fuzzy-corrigido para "buscar" + termo literal "vetorial") só
+    mostrava "vetorial" no trecho — "buscar" existia no mesmo chunk mas
+    ficava de fora porque antes o fallback era ignorado assim que qualquer
+    termo literal aparecia, mesmo que só 1 de 2 termos da query.
+
+    Quando mais de uma posição (literal e/ou fuzzy) aparece no conteúdo,
+    tenta expandir a janela (até `max_width`, padrão 2×`width`) pra cobrir
+    do primeiro ao último — um chunk com "duckdb" e "analista" a 400 chars
+    de distância ainda é um match completo, mas uma janela fixa de largura
+    `width` centralizada só no primeiro termo esconderia o segundo, fazendo
+    o resultado parecer parcial mesmo sendo genuíno. Se os termos estiverem
     longe demais pra caber em `max_width`, cai de volta pra centralizar só
     no primeiro — melhor mostrar um termo com clareza do que dois raspando
     nas bordas.
@@ -140,23 +149,34 @@ def preview_window(content: str, priority_terms: list[str],
     if len(content) <= width:
         return content.replace("\n", " ")
 
-    positions = _find_term_positions(content, priority_terms)
-    if not positions:
-        positions = _find_term_positions(content, fallback_terms)
+    priority_positions = _find_term_positions(content, priority_terms)
 
-    if not positions:
-        window = content[:width].replace("\n", " ")
-        return window + "..."
-
-    first_pos, last_pos = min(positions), max(positions)
-    span = last_pos - first_pos
-
-    if span > 0 and span <= (max_width - width):
-        center = (first_pos + last_pos) // 2
-        target_width = min(max_width, span + width)
+    if priority_positions:
+        # Já tem âncora literal — fallback pode ESTENDER a janela, mas se a
+        # extensão não couber em max_width, volta a centralizar só na(s)
+        # posição(ões) literal(is) — fallback nunca decide o centro sozinho.
+        merged = priority_positions + _find_term_positions(content, fallback_terms)
+        first_pos, last_pos = min(merged), max(merged)
+        span = last_pos - first_pos
+        if span > 0 and span <= (max_width - width):
+            center = (first_pos + last_pos) // 2
+            target_width = min(max_width, span + width)
+        else:
+            center = min(priority_positions)
+            target_width = width
     else:
-        center = first_pos
-        target_width = width
+        positions = _find_term_positions(content, fallback_terms)
+        if not positions:
+            window = content[:width].replace("\n", " ")
+            return window + "..."
+        first_pos, last_pos = min(positions), max(positions)
+        span = last_pos - first_pos
+        if span > 0 and span <= (max_width - width):
+            center = (first_pos + last_pos) // 2
+            target_width = min(max_width, span + width)
+        else:
+            center = first_pos
+            target_width = width
 
     half = target_width // 2
     start = max(0, center - half)

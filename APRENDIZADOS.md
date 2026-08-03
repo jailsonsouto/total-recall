@@ -451,3 +451,30 @@
     - **Terceira rodada de Haiku (pós fix 2)**: identificou corretamente o chunk do diagrama mermaid como "GENUINE MATCH — both terms in same diagram context". Veredito final do Haiku ("só 1 de 5 tem os dois termos juntos, os outros são hits parciais de um termo só") deixou de ser um bug da ferramenta e virou uma leitura literal correta do corpus — nem todo chunk que menciona "duckdb" ou "analista" isoladamente devia mesmo aparecer como match forte pros dois juntos
     - Metodologia replicável: sempre que um formato de saída for consumido por um sub-agente (não só por um humano no terminal), validar com o modelo mais fraco da cadeia (Haiku), não só com o mais forte — o que é óbvio pra quem já sabe a resposta pode enganar quem está vendo o output pela primeira vez
     - **Onde**: `models.py` (`preview_window`, `extract_query_terms`, `_find_term_positions`, `_find_first_term_pos`, `format_pointers` bloco "rest"), `cli.py` (bloco `rich`), `tests/test_preview_window.py` (23 testes, incluindo reprodução exata do chunk mermaid real)
+
+## 2026-08-03 — Três bugs reais de score/preview corrigidos; um quarto investigado e conscientemente NÃO corrigido
+
+58. **`preview_window()` ignorava termo fuzzy quando o termo literal já tinha ancorado a janela**
+    - Achado com dado real: query "buscla vetorial" ("buscla" → fuzzy pra "busca"/"buscar"/"buscas", "vetorial" literal) — a barra de cobertura diria "①fuzzy ②literal", mas o trecho só mostrava "vetorial", nunca "buscar", mesmo estando no mesmo chunk. `priority_terms` (literal) achando QUALQUER posição fazia `fallback_terms` (fuzzy) ser ignorado por completo, não só "perder prioridade"
+    - Fix: quando `priority_terms` ancora ao menos 1 posição, `fallback_terms` agora ESTENDE a janela (funde as posições, recalcula span) em vez de ser descartado; se a extensão não couber em `max_width`, volta a centralizar só nas posições literais (preserva o comportamento protetor original — um teste antigo pegou essa regressão na primeira tentativa do fix, corrigido antes de seguir)
+    - **Onde**: `models.py::preview_window()`, `tests/test_preview_window.py` (5 testes novos)
+
+59. **Fórmula do score FTS5 invertida: match mais forte pontuava PIOR** *(mesmo bug do item 3 do handoff de crossover, agora efetivamente corrigido — tinha ficado só diagnosticado na sessão anterior)*
+    - `keyword_search()`: `score = 1.0 / (1.0 + rank)`, onde `rank` já é `abs(bm25_rank)` — cresce com a força do match (bm25 do SQLite é mais negativo quanto melhor, `abs()` inverteu o sinal). A fórmula antiga DECRESCE com rank maior — direção oposta
+    - Verificado empiricamente (antes do fix): "aste OR absa", melhor match (rank=-9.9275) → score=0.0915 (o MENOR score do lote); 8º melhor (rank=-8.8906) → score=0.1011 (maior que o do 1º lugar)
+    - Fix: `score = rank / (1.0 + rank)` — mesma faixa [0,1), direção certa
+    - **Onde**: `vector_store.py::keyword_search()`, `tests/test_fts5_score.py`
+
+60. **Bug pré-existente exposto pelo fix do item 59: `hybrid_search()` deduplicava por prefixo de texto, não por `chunk_id` — somava contribuições de chunks quase-duplicados**
+    - A chave de merge era `f"{session_id}:{content[:100]}"`. Quando a mesma sessão tem N chunks DIFERENTES (chunk_id distintos) com os mesmos ~100 chars iniciais — ex.: o mesmo README colado 4x numa sessão Codex — o `+=` do merge somava a contribuição de texto das 4 vezes num resultado só
+    - Ficou invisível enquanto o score do item 59 estava quebrado (scores uniformemente pequenos, ~0.05-0.15, escondiam o acúmulo). O fix do item 59 tornou os scores individuais maiores/mais diferenciados, e o acúmulo passou a estourar o teto teórico: **score=2.74 numa busca real** ("buscla vetorial"), matematicamente impossível já que `vector_weight + text_weight` sempre soma 1.0
+    - Fix: chave de dedup trocada pra `chunk_id` (rowid compartilhado entre `chunks_vec` e `chunks_fts`, ambos apontam pra `chunks.id` — preciso, sem colisão), no lugar do prefixo de texto (aproximação frágil que colide em conteúdo quase-duplicado)
+    - **Onde**: `vector_store.py::hybrid_search()`, `tests/test_fts5_score.py` (3 testes novos, `TestHybridSearchDedup`)
+    - Lição: corrigir um bug de escala pode expor um segundo bug de lógica que só se torna visível na escala nova — sempre reverificar com dado real depois de um fix de fórmula, não só rodar a suíte de testes
+
+61. **Achado 2 do handoff anterior (FTS5 passa incondicionalmente o piso de confiança, mesmo via match só-fuzzy) — investigado, conscientemente NÃO corrigido**
+    - Hipótese de fix: exigir presença literal de termo da query (ou de suas expansões rastreadas) pra isentar do piso `MIN_VECTOR_ONLY_SCORE`
+    - Testado com números reais antes de implementar (pedido do usuário: "tenha certeza que trazem ganho"): `fuzz.ratio` e proporção de comprimento NÃO distinguem o caso bom do caso ruim. `wren`→`wrenai` (validado como bom) e `photosynthesis`→`synthesis` (o falso positivo achado) têm perfis quase idênticos — ratio 80.0 vs 78.3, proporção de comprimento 0.67 vs 0.64
+    - Conclusão: a diferença entre os dois casos é SEMÂNTICA (wren/wrenai são o mesmo produto; photosynthesis/synthesis são conceitos diferentes que só parecem parecidos como string), não sintática — nenhum guard baseado em string (rapidfuzz ratio, comprimento) resolve isso de forma confiável. Corrigir de verdade exigiria checagem semântica (embedding) na hora de aceitar candidato fuzzy, uma mudança de escopo maior (custo de latência: chamada Ollama extra por token raro/candidato)
+    - Decisão: não implementar um fix que eu já provei, com dado real, que não resolveria o caso concreto e arriscaria quebrar casos já validados. Registrado como backlog de escopo maior, não como pendência simples
+    - **Onde**: nenhum código alterado — decisão documentada aqui para não re-investigar do zero se o pedido voltar

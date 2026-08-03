@@ -516,7 +516,14 @@ class SQLiteVectorStore:
                     role=meta["role"],
                     timestamp=_parse_timestamp(meta["timestamp"]) if meta["timestamp"] else None,
                     distance=rank,
-                    score=1.0 / (1.0 + rank),
+                    # rank aqui já é abs(bm25_rank) — CRESCE com a força do
+                    # match (bm25 do SQLite é mais negativo quanto melhor;
+                    # abs() já inverteu o sinal). Fórmula precisa crescer
+                    # com rank, não decrescer: rank/(1+rank), não 1/(1+rank)
+                    # (essa segunda pontuava PIOR o match mais forte —
+                    # verificado empiricamente com "aste OR absa": o melhor
+                    # match do lote, rank=-9.9275, virava o MENOR score).
+                    score=rank / (1.0 + rank),
                     metadata=json.loads(meta["metadata"]) if meta["metadata"] else {},
                     session_title=meta["title"] or "",
                     project_label=meta["project_label"] or "",
@@ -554,23 +561,28 @@ class SQLiteVectorStore:
         keyword_results, query_info = self.keyword_search(query, n_results * 2, session_id)
         query_info["search_mode"] = search_mode
 
-        scored: dict[str, dict] = {}
+        # chunk_id (rowid compartilhado entre chunks_vec e chunks_fts, ambos
+        # apontam pra chunks.id) é a chave de dedup — não session_id+prefixo
+        # de texto. O prefixo colide em conteúdo quase-duplicado (ex.: o
+        # mesmo README indexado 4x na mesma sessão, com chunk_ids diferentes
+        # mas texto igual nos primeiros 100 chars), fazendo o `+=` somar a
+        # mesma contribuição de texto várias vezes — achado real: score de
+        # 2.74 (impossível, pesos somam 1.0) numa busca "buscla vetorial".
+        scored: dict[int, dict] = {}
 
         for r in vector_results:
-            key = f"{r.session_id}:{r.content[:100]}"
-            scored[key] = {
+            scored[r.chunk_id] = {
                 "result": r,
                 "score": vector_weight * r.score,
                 "sources": ["vector"],
             }
 
         for r in keyword_results:
-            key = f"{r.session_id}:{r.content[:100]}"
-            if key in scored:
-                scored[key]["score"] += text_weight * r.score
-                scored[key]["sources"].append("fts5")
+            if r.chunk_id in scored:
+                scored[r.chunk_id]["score"] += text_weight * r.score
+                scored[r.chunk_id]["sources"].append("fts5")
             else:
-                scored[key] = {
+                scored[r.chunk_id] = {
                     "result": r,
                     "score": text_weight * r.score,
                     "sources": ["fts5"],

@@ -105,6 +105,32 @@ class TestPreviewWindow:
         result = preview_window(content, ["wren"], ["wrenai"], width=300)
         assert "wrenai" in result
 
+    def test_fallback_extends_window_when_priority_already_anchored(self):
+        """Achado real ("buscla vetorial"): "vetorial" (priority, literal) e
+        "buscar" (fallback, fuzzy de "buscla") no mesmo chunk — antes do fix,
+        o fallback era ignorado assim que "vetorial" sozinho já ancorava a
+        janela, escondendo "buscar" mesmo estando por perto."""
+        content = (
+            "x" * 100
+            + "vou buscar as sessões indexadas "
+            + "y" * 50
+            + "um caminho vetorial separado"
+            + "z" * 100
+        )
+        result = preview_window(content, ["vetorial"], ["buscar"], width=300)
+        assert "vetorial" in result
+        assert "buscar" in result
+
+    def test_fallback_does_not_override_priority_when_far_and_unhelpful(self):
+        """Fallback só ESTENDE uma janela já ancorada — se estender ultrapassar
+        max_width, cai de volta pro comportamento de só um termo (o já
+        existente teste de "termos longe demais"), sem quebrar."""
+        content = "x" * 100 + "vetorial" + "y" * 5000 + "buscar" + "z" * 100
+        result = preview_window(content, ["vetorial"], ["buscar"], width=300)
+        assert "vetorial" in result
+        # "buscar" pode ou não aparecer — está longe demais pra caber; o
+        # importante é não quebrar e continuar mostrando "vetorial" com clareza
+
     def test_two_terms_close_together_both_appear(self):
         """Achado pelo Haiku após o primeiro fix: um chunk com "duckdb" e
         "analista" a poucos chars de distância é um match completo, mas
