@@ -416,6 +416,13 @@ def _print_table_format(ctx, query: str):
             f"{circled_number(i)}{t}" for i, t in enumerate(query_terms, 1)
         )
         click.echo(f"Termos: {legend}     {COVERAGE_LEGEND}\n")
+    else:
+        # Query sem palavra significativa (ex.: só termos de 1 char) — sem
+        # isso, a barra vira "—" em todas as linhas sem explicação nenhuma.
+        click.echo(
+            "Termos: nenhum termo específico o suficiente pra medir "
+            "cobertura — resultados ordenados só por relevância\n"
+        )
 
     # Monta as linhas da tabela primeiro pra calcular largura de coluna
     rows = []

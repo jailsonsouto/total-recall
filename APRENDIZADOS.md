@@ -504,3 +504,9 @@
     - Causa: o tokenizer padrão do FTS5 (`unicode61`) remove acento por padrão — "próximo" e "proximo" são o mesmo token pro índice. `term_coverage()` comparava string crua em Python, sem essa normalização — `"proximo" in "próximo check".lower()` dá `False`
     - Fix: `_strip_accents()` (NFKD + remove caracteres combinantes) aplicado nos dois lados da comparação (termo da query/variante fuzzy E conteúdo) antes de checar presença — espelha exatamente a normalização que o FTS5 já faz
     - **Onde**: `models.py` (`_strip_accents`, `term_coverage`), `tests/test_table_format.py` (2 testes novos: fuzzy e literal com acento)
+
+65. **Legenda de `--format table` sumia por completo em query sem termo válido — usuário perguntou "a legenda aparece?" e a resposta era "não, nesse caso não"**
+    - Query com só palavras de 1 char (ex.: `total-recall search "a"`) faz `extract_query_terms()` retornar lista vazia — o `if query_terms:` que imprime a linha "Termos: ..." pulava inteiro, e `render_coverage_bar([])` retornava `"[]"` (colchete vazio, parece bug de exibição) em toda linha, sem nenhuma explicação
+    - Fix: `render_coverage_bar([])` agora retorna `"—"` (trace claro de "nada pra mostrar aqui, de propósito", não colchete vazio); `_print_table_format()` ganhou um `else` explícito explicando por que não há barra de cobertura nesse caso, em vez de omitir a linha silenciosamente
+    - Validado ao vivo: `total-recall search "a" --format table` agora mostra "Termos: nenhum termo específico o suficiente pra medir cobertura — resultados ordenados só por relevância" e `—` em cada linha
+    - **Onde**: `models.py` (`render_coverage_bar`), `cli.py` (`_print_table_format`), `tests/test_table_format.py`

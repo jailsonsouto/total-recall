@@ -133,9 +133,14 @@ def term_coverage(content: str, query_terms: list[str],
 def render_coverage_bar(levels: list[str], total_width: int = 10) -> str:
     """Desenha a barra segmentada: um segmento por termo, `total_width`
     caracteres divididos entre os segmentos (mesma largura total pra
-    todas as linhas de uma mesma busca, pra alinhar em coluna)."""
+    todas as linhas de uma mesma busca, pra alinhar em coluna).
+
+    Sem termos pra medir cobertura (query sem palavras significativas —
+    ex.: só palavras de 1 char), retorna "—" em vez de "[]" vazio: um
+    colchete vazio parece um bug de exibição, o traço deixa claro que não
+    há nada pra mostrar aqui, de propósito."""
     if not levels:
-        return "[]"
+        return "—"
     seg_width = max(1, total_width // len(levels))
     segments = [_COVERAGE_CHARS.get(level, "░") * seg_width for level in levels]
     return "[" + "|".join(segments) + "]"

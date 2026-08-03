@@ -90,7 +90,10 @@ class TestRenderCoverageBar:
         assert bar.count("|") == 2
 
     def test_empty_levels(self):
-        assert render_coverage_bar([]) == "[]"
+        """Achado real: query sem termo válido (ex.: "a", 1 char) deixava
+        a barra como "[]" vazio — parecia bug de exibição, não "nada pra
+        mostrar aqui de propósito"."""
+        assert render_coverage_bar([]) == "—"
 
     def test_many_terms_minimum_width_one(self):
         levels = ["literal"] * 15
