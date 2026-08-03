@@ -31,6 +31,15 @@ SESSIONS_ROOT = Path(os.getenv(
     str(Path.home() / ".claude" / "projects")
 ))
 
+# Banco do "irmão mais novo" (total-recall-codex) para busca cruzada.
+# Aberto sempre read-only — ver database.py Database(read_only=True).
+# É uma ponte de LEITURA sob demanda, não um merge de índices: os dois
+# bancos nunca se tocam em disco, a fusão acontece em memória (recall_cross).
+SIBLING_DB_PATH = Path(os.getenv(
+    "TOTAL_RECALL_SIBLING_DB",
+    str(Path.home() / ".total-recall-codex" / "total-recall-codex.db"),
+))
+
 # ══════════════════════════════════════════════════════════════
 # EMBEDDING
 # ══════════════════════════════════════════════════════════════

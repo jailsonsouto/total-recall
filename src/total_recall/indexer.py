@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 from typing import Optional
 
-from .database import Database
+from .database import Database, serialize_vector
 from .embeddings import EmbeddingProvider
 from .models import SessionInfo, Chunk
 from .session_discovery import SessionDiscovery, DiscoveredFile
@@ -115,6 +115,51 @@ class Indexer:
                  report["files_indexed"], report["chunks_created"],
                  json.dumps(report["errors"], ensure_ascii=False), run_id],
             )
+
+        return report
+
+    def backfill_embeddings(self, batch_size: int = 20) -> dict:
+        """Gera embeddings para chunks marcados has_embedding=0.
+
+        Cobre o backlog deixado por falhas anteriores de conexão com o
+        Ollama (timeout ou serviço fora do ar durante a indexação original).
+
+        Diferente de `index(full=True)`: não apaga nada. Cada chunk já
+        existe em `chunks`/`chunks_fts` — este método só preenche o vetor
+        que faltou (`chunks_vec`) e vira a flag `has_embedding`. Commita em
+        lotes pequenos (transações curtas) para não segurar lock por muito
+        tempo e para que uma falha isolada não perca o progresso já feito —
+        seguro para rodar com outros terminais lendo/indexando ao mesmo tempo.
+        """
+        report = {"chunks_checked": 0, "chunks_fixed": 0, "chunks_failed": 0}
+        if not self.embed:
+            return report
+
+        with self.db.connection() as conn:
+            rows = conn.execute(
+                "SELECT id, content FROM chunks WHERE has_embedding = 0"
+            ).fetchall()
+
+        report["chunks_checked"] = len(rows)
+        embed_model = self.embed.model_name
+
+        for start in range(0, len(rows), batch_size):
+            batch = rows[start:start + batch_size]
+            with self.db.transaction() as conn:
+                for row in batch:
+                    vector = self.vector_store._embed_with_cache(conn, row["content"])
+                    if vector is None:
+                        report["chunks_failed"] += 1
+                        continue
+                    conn.execute(
+                        "INSERT OR REPLACE INTO chunks_vec (rowid, embedding) VALUES (?, ?)",
+                        [row["id"], serialize_vector(vector)],
+                    )
+                    conn.execute(
+                        "UPDATE chunks SET has_embedding = 1, embed_model = ? WHERE id = ?",
+                        [embed_model, row["id"]],
+                    )
+                    report["chunks_fixed"] += 1
 
         return report
 

@@ -197,7 +197,35 @@ Após `total-recall init`, a skill `/recall` fica disponível em qualquer sessã
 | `/recall <query> --clip` | Busca e salva clipping automaticamente |
 | `/recall <query> --session abc123 --clip` | Combinado |
 
-O Claude analisa os trechos recuperados, sintetiza e responde com citação de sessão, data e fonte.
+O Claude analisa os trechos recuperados, sintetiza e responde com citação de sessão, data, fonte e origem (`[CLAUDE-CODE]`/`[CODEX]`).
+
+### Busca cruzada com o total-recall-codex
+
+Se o projeto irmão [total-recall-codex](https://github.com/jailsonsouto/total-recall-codex) (mesma ferramenta, para sessões do Codex) estiver instalado e indexado na mesma máquina, o Total Recall pode consultar as duas coleções sob demanda. **O padrão continua sendo só este banco** (`claude-code`) — rápido, sem abrir uma segunda conexão nem embedar a query duas vezes. Busca cruzada é opt-in:
+
+```bash
+# Padrão: só este banco (Claude Code CLI)
+total-recall search "por que escolhemos sqlite-vec"
+
+# Cruzada: funde os dois bancos por score
+total-recall search "por que escolhemos sqlite-vec" --source both
+
+# Só o banco irmão
+total-recall search "por que escolhemos sqlite-vec" --source codex
+```
+
+Cada resultado é marcado com `[CLAUDE-CODE]` ou `[CODEX]` em todos os formatos de saída (`rich`, `context`, `pointers`, `json`) — sempre, mesmo quando a origem é o banco local, para não obrigar o leitor a inferir por ausência de marca.
+
+Na skill `/recall`, peça a busca cruzada com frases dentro do próprio pedido:
+
+```
+/recall cruzada: diagnóstico do bug de session_id
+/recall buscar-no-codex: decisão sobre o parser de turnos abortados
+```
+
+**Isolamento continua total no disco.** A leitura do banco irmão é sempre read-only (conexão SQLite `mode=ro`, bloqueada a nível de driver — não só por convenção do código); os dois bancos nunca se tocam fisicamente, a fusão acontece só em memória, na hora de apresentar o resultado. Funciona porque os dois projetos usam o mesmo modelo de embedding (`qwen3-embedding:4b`, 1024 dims) — os vetores são comparáveis entre bancos.
+
+Se o banco irmão não existir nessa máquina, `--source both` avisa em stderr e segue só com o banco local (não quebra); `--source codex` sozinho, sem o banco irmão, retorna um erro claro em vez de silêncio.
 
 ### Sessões e exportação
 
@@ -310,6 +338,7 @@ Todos os parâmetros têm defaults razoáveis. Sobrescreva via variáveis de amb
 ```bash
 TOTAL_RECALL_DATA=~/.total-recall           # Diretório de dados
 TOTAL_RECALL_SESSIONS=~/.claude/projects    # Raiz dos JSONLs
+TOTAL_RECALL_SIBLING_DB=~/.total-recall-codex/total-recall-codex.db  # Banco do total-recall-codex (busca cruzada, read-only)
 TOTAL_RECALL_EMBED_PROVIDER=ollama          # ollama | openai
 TOTAL_RECALL_OLLAMA_MODEL=qwen3-embedding:4b
 TOTAL_RECALL_EMBEDDING_DIMENSIONS=1024      # 512 a 2560; 1024 é o ponto ideal
@@ -357,7 +386,8 @@ total-recall/
 ├── skill/
 │   └── recall.md             # Definição da skill /recall
 ├── tests/
-│   └── test_search.py        # Suite: fuzzy, highlighting, benchmark P95
+│   ├── test_search.py        # Suite: fuzzy, highlighting, benchmark P95
+│   └── test_crossover.py     # Suite: banco read-only, recall_cross, origem nos formatos
 ├── docs/
 │   ├── GUIA-USUARIO.md       # Referência completa de sintaxe e exemplos
 │   ├── exemplos-clipping/    # Clippings reais do desenvolvimento

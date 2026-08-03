@@ -15,6 +15,7 @@
 7. [Rotina recomendada](#7-rotina-recomendada)
 8. [Perguntas frequentes](#8-perguntas-frequentes)
 9. [Limites do sistema — quando "nenhum resultado" é a resposta correta](#9-limites-do-sistema--quando-nenhum-resultado-é-a-resposta-correta)
+10. [Busca cruzada com o total-recall-codex](#10-busca-cruzada-com-o-total-recall-codex)
 
 ---
 
@@ -263,11 +264,23 @@ total-recall search "query" --format json                # Para processamento
 total-recall search "query" --format rich                # Visual (padrão)
 total-recall search "query" --format context --output -auto-        # Salva clipping automático
 total-recall search "query" --format context --output meu-clip.md  # Salva com nome manual
+total-recall search "query" --format pointers            # Ponteiros: 1 citação completa por sessão, resto resumido
+total-recall search "query" --source both                # Busca cruzada com o total-recall-codex (ver seção 10)
 ```
 
-O formato `context` é o mais útil dentro do Claude Code — produz um bloco Markdown estruturado pronto para ser interpretado pelo modelo.
+O formato `context` é o mais útil dentro do Claude Code — produz um bloco Markdown estruturado pronto para ser interpretado pelo modelo. `pointers` é melhor quando a busca traz muitas sessões diferentes e você quer varrer rápido antes de aprofundar numa só.
 
 Os clippings são salvos em `~/.total-recall/clips/` com cabeçalho de data/hora.
+
+### `total-recall backfill-embeddings`
+
+```bash
+total-recall backfill-embeddings
+```
+
+Preenche o vetor de chunks que ficaram com `has_embedding=0` — normalmente porque o Ollama estava fora do ar durante uma indexação anterior (a indexação continua funcionando em modo FTS5-only nesse caso, mas o chunk perde a busca semântica até isso ser corrigido). Verifique se há chunks pendentes com `total-recall doctor` (linha "Chunks sem embedding").
+
+Diferença importante em relação a `total-recall index --full`: **não apaga nada**. Só completa o que faltou, em transações curtas — pode rodar com outro terminal usando `/recall` ao mesmo tempo sem derrubar a busca local (a busca vetorial só fica temporariamente mais fraca — modo FTS5-only nos chunks ainda pendentes — enquanto o backfill compete pelo Ollama). Prefira este comando a `--full` sempre que o problema for só embedding faltando, não corrupção de dados.
 
 ### `total-recall sessions`
 
@@ -334,6 +347,7 @@ Este é o uso mais poderoso do sistema. Em vez de sair para o terminal, você ac
 | **Aprofundar sessão** | `/recall query --session abc123 --limit 15` | `--session abc123 -n 15` |
 | **Exportar sessão** | não disponível | `total-recall export <session-id>` |
 | **Formato JSON** | não disponível | `--format json` |
+| **Busca cruzada (codex)** | frase `cruzada`/`buscar-no-codex` no texto | `--source both` / `--source codex` |
 
 ### Flags disponíveis no /recall
 
@@ -353,13 +367,15 @@ Este é o uso mais poderoso do sistema. Em vez de sair para o terminal, você ac
 /recall Milvus --session c3b0e47e --limit 15       # aprofunda numa sessão específica
 /recall o que decidimos sobre a arquitetura?       # query descritiva funciona bem
 /recall sqlite WAL backup --clip                   # referência técnica salva para depois
+/recall cruzada: decisão sobre o parser do codex   # também busca no total-recall-codex
+/recall buscar-no-codex: erro de timeout no eval   # só no total-recall-codex
 ```
 
 Os clippings ficam em `~/.total-recall/clips/` com nome gerado automaticamente (`2026-03-25_banco-vetorial-decisao.md`).
 
 ### O que acontece quando você usa /recall
 
-A skill detecta as flags, executa `total-recall search "<query limpa>" --format context [--output -auto-]` e injeta os resultados no contexto da conversa. O Claude recebe os trechos estruturados com sessão, data e conteúdo, e responde com base neles.
+A skill detecta as flags e frases-gatilho, executa `total-recall search "<query limpa>" --format context [--output -auto-] [--source both|codex]` e injeta os resultados no contexto da conversa. O Claude recebe os trechos estruturados com sessão, data, rótulo de origem (`[CLAUDE-CODE]`/`[CODEX]`, ver seção 10) e conteúdo, e responde com base neles.
 
 ### Quando usar /recall
 
@@ -580,6 +596,63 @@ Antes do piso de confiança existir, havia uma diferença importante entre os do
 | **Quem interpreta** | Claude lê e filtra os resultados | Você lê diretamente |
 | **Comportamento com ruído** | Claude detecta que os resultados não têm relação com a query e responde "não encontrado" | Exibe os resultados — parece real, mas é ruído |
 | **Honestidade** | Alta — Claude age como filtro inteligente | Dependia do usuário perceber os scores baixos |
+
+---
+
+## 10. Busca cruzada com o total-recall-codex
+
+### O que é
+
+Se você também usa Codex indexado pelo projeto irmão [`total-recall-codex`](https://github.com/jailsonsouto/total-recall-codex) na mesma máquina, dá pra consultar as duas coleções sem trocar de ferramenta. A leitura é sempre sob demanda e read-only — o Total Recall nunca escreve no banco do total-recall-codex, só abre e lê quando você pede.
+
+### Quando usar cada modo
+
+| Situação | Comando |
+|---|---|
+| Dia a dia — a resposta provavelmente está numa sessão sua do Claude Code | nada, o padrão já busca só aqui (mais rápido) |
+| "Discuti isso, mas não lembro se foi aqui ou no Codex" | `--source both` / `/recall cruzada: ...` |
+| Sabe que a decisão foi tomada trabalhando com Codex | `--source codex` / `/recall buscar-no-codex: ...` |
+
+### Exemplos
+
+```bash
+# Dia a dia: rápido, só este banco (padrão, sem flag)
+total-recall search "por que escolhemos sqlite-vec"
+
+# "Cadê aquilo que discutimos, não lembro se foi aqui ou no Codex"
+total-recall search "decisão do parser de turnos abortados" --source both
+
+# Sei que rodei isso no Codex, quero só de lá
+total-recall search "timeout no eval controlado" --source codex --format context
+```
+
+Dentro do Claude Code:
+
+```
+/recall cruzada: decisão sobre o parser de turnos abortados
+/recall buscar-no-codex: timeout no eval controlado
+```
+
+### Como reconhecer a origem
+
+Cada resultado vem com um rótulo entre colchetes — sempre, mesmo quando é o banco local, pra não obrigar você a adivinhar por ausência de marca:
+
+```
+[1] ▓▓▓▓▓▓░░░░ 0.82 | [CLAUDE-CODE] meu-projeto — Sessão abc12345
+[2] ▓▓▓▓▓░░░░░ 0.71 | [CODEX] outro-projeto — Codex — Sessão def67890
+```
+
+### Aprofundando um resultado do Codex
+
+Se o rótulo é `[CODEX]`, `--session <id>` sozinho não encontra nada — o padrão busca só o banco local. Inclua a origem:
+
+```bash
+total-recall search "..." --session def67890 --source codex --format context
+```
+
+### Isolamento
+
+A leitura do banco do total-recall-codex é sempre read-only — conexão SQLite `mode=ro`, bloqueada a nível de driver, não só por convenção de código; escrever nela levanta erro tanto no sqlite quanto no Python. Os dois bancos nunca se tocam em disco: a fusão de `--source both` acontece só em memória, na hora de montar a resposta. Se o total-recall-codex não estiver instalado/indexado nessa máquina, `--source both` avisa em stderr e segue só com o banco local; `--source codex` sozinho, sem o banco irmão, retorna um erro claro em vez de silêncio.
 
 O `/recall` já funcionava corretamente mesmo sem o piso — o Claude, ao receber os chunks, percebia que nenhum mencionava o termo buscado e informava o usuário. O filtro de score mínimo corrige o comportamento do CLI para que seja igualmente honesto, sem depender de interpretação humana.
 

@@ -28,6 +28,42 @@ _DECISION_MARKERS = {
 }
 
 
+def recall_cross(query: str, engines: dict[str, "RecallEngine"], limit: int = 5,
+                 session_id: Optional[str] = None) -> RecallContext:
+    """Roda a mesma busca em múltiplos engines (bancos separados) e funde
+    os resultados por score — usado por `--source both`.
+
+    Os bancos permanecem fisicamente isolados (cada um seu arquivo, cada
+    RecallEngine sua própria conexão); a fusão acontece só em memória, na
+    camada de apresentação. Comparável porque total-recall e total-recall-codex
+    usam o mesmo modelo/dimensão de embedding (qwen3-embedding:4b, 1024d).
+    """
+    all_results: list[SearchResult] = []
+    sessions_total = 0
+    chunks_total = 0
+    query_info: dict = {}
+
+    for origin, engine in engines.items():
+        ctx = engine.recall(query, limit=limit, session_id=session_id)
+        for r in ctx.results:
+            r.origin = origin
+        all_results.extend(ctx.results)
+        sessions_total += ctx.sessions_searched
+        chunks_total += ctx.total_chunks
+        if not query_info:
+            query_info = ctx.query_info
+
+    all_results.sort(key=lambda r: r.score, reverse=True)
+
+    return RecallContext(
+        query=query,
+        results=all_results[:limit],
+        sessions_searched=sessions_total,
+        total_chunks=chunks_total,
+        query_info=query_info,
+    )
+
+
 class RecallEngine:
     """Busca inteligente com decay temporal e diversidade."""
 

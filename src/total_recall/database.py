@@ -43,23 +43,39 @@ class Database:
             conn.execute("INSERT ...")  # atômico
     """
 
-    def __init__(self, db_path: Optional[Path] = None):
+    def __init__(self, db_path: Optional[Path] = None, read_only: bool = False):
         self.db_path = db_path or DB_PATH
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
+        self.read_only = read_only
+        if self.read_only:
+            # Banco de outro projeto (busca cruzada) — nunca cria diretório
+            # nem toca schema aqui. Só lê.
+            if not self.db_path.exists():
+                raise FileNotFoundError(
+                    f"Banco read-only não encontrado: {self.db_path}"
+                )
+        else:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
-        # timeout alto: writers concorrentes (ex.: hooks SessionStart de duas
-        # sessões abrindo perto uma da outra) esperam a transação em andamento
-        # em vez de falhar com "database is locked" — o default do sqlite3 (5s)
-        # é curto demais quando a transação inclui chamadas de embedding (Ollama)
-        conn = sqlite3.connect(str(self.db_path), timeout=60.0)
+        if self.read_only:
+            # uri=True + mode=ro: garante a nível de driver que escrita é
+            # impossível nesta conexão, não só por convenção do código.
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
+        else:
+            # timeout alto: writers concorrentes (ex.: hooks SessionStart de
+            # duas sessões abrindo perto uma da outra) esperam a transação em
+            # andamento em vez de falhar com "database is locked" — o default
+            # do sqlite3 (5s) é curto demais quando a transação inclui
+            # chamadas de embedding (Ollama)
+            conn = sqlite3.connect(str(self.db_path), timeout=60.0)
         conn.row_factory = sqlite3.Row
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         conn.enable_load_extension(False)
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA foreign_keys = ON")
+        if not self.read_only:
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     @contextmanager
@@ -72,6 +88,10 @@ class Database:
 
     @contextmanager
     def transaction(self):
+        if self.read_only:
+            raise RuntimeError(
+                f"Banco {self.db_path} aberto em modo read-only — escrita bloqueada."
+            )
         conn = self._get_connection()
         try:
             yield conn

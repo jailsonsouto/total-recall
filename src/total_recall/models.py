@@ -19,6 +19,23 @@ _ANSI_CYAN = "\033[46m\033[30m"     # abbreviation matches
 _ANSI_RESET = "\033[0m"
 
 
+# ══════════════════════════════════════════════════════════════
+# Origem — busca cruzada (total-recall / total-recall-codex)
+# ══════════════════════════════════════════════════════════════
+
+_ORIGIN_LABELS = {
+    "claude-code": "CLAUDE-CODE",
+    "codex": "CODEX",
+}
+
+
+def origin_label(origin: str) -> str:
+    """Selo de origem para exibição — sempre visível, nunca omitido pra
+    'origem padrão': numa busca cruzada, marcar só o banco estrangeiro
+    obriga o leitor a inferir o local pela ausência de marca."""
+    return f"[{_ORIGIN_LABELS.get(origin, origin.upper())}]"
+
+
 def highlight_text(text: str, terms: list[str],
                    mode: str = "ansi") -> str:
     """Aplica marcador de texto nos termos encontrados.
@@ -89,6 +106,7 @@ class SearchResult:
     project_label: str = ""
     sources: list[str] = field(default_factory=list)  # ["vector", "fts5"]
     chunk_id: Optional[int] = None  # rowid em chunks / chunks_vec
+    origin: str = "claude-code"  # "claude-code" | "codex" — qual banco respondeu (busca cruzada)
 
 
 @dataclass
@@ -130,7 +148,7 @@ class RecallContext:
         for i, r in enumerate(self.results, 1):
             ts = r.timestamp.strftime("%d/%m/%Y %H:%M") if r.timestamp else "?"
             sources_str = " + ".join(s.upper() for s in r.sources) if r.sources else "?"
-            header = f"### {i}. {r.project_label} — {r.session_title}"
+            header = f"### {i}. {origin_label(r.origin)} {r.project_label} — {r.session_title}"
             meta = f"*Sessão `{r.session_id[:8]}` | {ts} | score: {r.score:.3f} | {sources_str}*"
             content = highlight_text(r.content, highlight_terms, mode="markdown")
             lines.append(header)
@@ -182,7 +200,7 @@ class RecallContext:
         for i, r in full:
             ts = r.timestamp.strftime("%d/%m/%Y %H:%M") if r.timestamp else "?"
             sources_str = " + ".join(s.upper() for s in r.sources) if r.sources else "?"
-            lines.append(f"### [{i}] {r.project_label} — {r.session_title}")
+            lines.append(f"### [{i}] {origin_label(r.origin)} {r.project_label} — {r.session_title}")
             lines.append(
                 f"*Sessão `{r.session_id[:8]}` | {ts} | "
                 f"score: {r.score:.3f} | {sources_str}*"
@@ -199,12 +217,15 @@ class RecallContext:
                     preview += "…"
                 repeat = " (sessão já citada)" if r.session_id in quoted_sessions else ""
                 lines.append(
-                    f"- [{i}] `{r.session_id[:8]}`{repeat} | {ts} | {r.score:.2f} | "
+                    f"- [{i}] {origin_label(r.origin)} `{r.session_id[:8]}`{repeat} | {ts} | {r.score:.2f} | "
                     f"{r.project_label} — {preview}"
                 )
             lines.append(
                 f"\n*Para expandir um ponteiro: "
-                f"`total-recall search \"{self.query}\" --session <id> --format context`*"
+                f"`total-recall search \"{self.query}\" --session <id> --source <origem> --format context`*"
+                f" — troque `<origem>` por `claude-code` ou `codex` conforme o rótulo mostrado"
+                f" entre colchetes ao lado do ponteiro (o padrão do `--source` é `claude-code`,"
+                f" então um ponteiro `[CODEX]` some se você não passar `--source codex`)."
             )
 
         return "\n".join(lines)

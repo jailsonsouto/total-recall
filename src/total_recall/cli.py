@@ -16,10 +16,10 @@ if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-from .config import DATA_DIR, DB_PATH, EXPORTS_PATH, SESSIONS_ROOT
+from .config import DATA_DIR, DB_PATH, EXPORTS_PATH, SESSIONS_ROOT, SIBLING_DB_PATH
 from .database import Database
 from .embeddings import get_embedding_provider
-from .models import highlight_text
+from .models import highlight_text, origin_label
 
 
 def _score_bar(score: float, width: int = 10) -> str:
@@ -185,6 +185,54 @@ def index(full, subagents):
             click.echo(f"    - {err}")
 
 
+def _build_sibling_engine(provider):
+    """Constrói um RecallEngine read-only para o banco do total-recall-codex
+    (busca cruzada, --source codex|both).
+
+    Retorna None se o banco não existir — não é erro, é "irmão não indexado
+    ainda nesta máquina" e o chamador decide como avisar o usuário.
+
+    Recebe `provider` já pronto em vez de chamar get_embedding_provider() de
+    novo: essa função faz um embed_document("test") real a cada chamada, e
+    repeti-la só para o banco irmão dobraria a ida ao Ollama sem necessidade
+    — os dois bancos usam o mesmo modelo/dimensão, o provider é compartilhável.
+    """
+    from .recall_engine import RecallEngine
+    from .vector_store import SQLiteVectorStore
+
+    if not SIBLING_DB_PATH.exists():
+        return None
+    db = Database(db_path=SIBLING_DB_PATH, read_only=True)
+    vector_store = SQLiteVectorStore(db, provider)
+    return RecallEngine(db, vector_store)
+
+
+@main.command("backfill-embeddings")
+def backfill_embeddings():
+    """Gera embeddings para chunks que ficaram sem vetor (has_embedding=0),
+    sem apagar nada — alternativa segura a 'index --full' quando só falta
+    fechar o backlog de embedding (ex.: Ollama esteve fora do ar antes)."""
+    from .indexer import Indexer
+    from .vector_store import SQLiteVectorStore
+
+    db = Database()
+    provider = get_embedding_provider()
+    if not provider:
+        click.echo("Ollama indisponível — nada a fazer. Verifique 'total-recall doctor'.")
+        return
+
+    vector_store = SQLiteVectorStore(db, provider)
+    indexer = Indexer(db, vector_store, provider, discovery=None)
+
+    click.echo("Buscando chunks sem embedding...")
+    result = indexer.backfill_embeddings()
+
+    click.echo(f"  Verificados: {result['chunks_checked']}")
+    click.echo(f"  Corrigidos:  {result['chunks_fixed']}")
+    click.echo(f"  Falharam:    {result['chunks_failed']}")
+    click.echo("\nBackfill concluído.")
+
+
 @main.command()
 @click.argument("query")
 @click.option("--limit", "-n", default=5, help="Número de resultados")
@@ -194,17 +242,45 @@ def index(full, subagents):
               default="rich", help="Formato de saída")
 @click.option("--output", "-o", default=None,
               help="Salva resultado em arquivo Markdown (clipping)")
-def search(query, limit, session, fmt, output):
+@click.option("--source", type=click.Choice(["claude-code", "both", "codex"]), default="claude-code",
+              help="claude-code (padrão, só este banco) | "
+                   "both (funde este banco com o do total-recall-codex) | codex (só o total-recall-codex, read-only)")
+def search(query, limit, session, fmt, output, source):
     """Busca em todas as sessões indexadas."""
-    from .recall_engine import RecallEngine
+    from .recall_engine import RecallEngine, recall_cross
     from .vector_store import SQLiteVectorStore
 
-    db = Database()
     provider = get_embedding_provider()
-    vector_store = SQLiteVectorStore(db, provider)
-    engine = RecallEngine(db, vector_store)
 
-    ctx = engine.recall(query, limit=limit, session_id=session)
+    if source == "claude-code":
+        db = Database()
+        vector_store = SQLiteVectorStore(db, provider)
+        engine = RecallEngine(db, vector_store)
+        ctx = engine.recall(query, limit=limit, session_id=session)
+    elif source == "codex":
+        sibling_engine = _build_sibling_engine(provider)
+        if sibling_engine is None:
+            raise click.ClickException(
+                f"Banco do total-recall-codex não encontrado em {SIBLING_DB_PATH} "
+                "— ele existe e já foi indexado nessa máquina?"
+            )
+        ctx = sibling_engine.recall(query, limit=limit, session_id=session)
+        for r in ctx.results:
+            r.origin = "codex"
+    else:  # both
+        db = Database()
+        vector_store = SQLiteVectorStore(db, provider)
+        engines = {"claude-code": RecallEngine(db, vector_store)}
+        sibling_engine = _build_sibling_engine(provider)
+        if sibling_engine is not None:
+            engines["codex"] = sibling_engine
+        else:
+            click.echo(
+                f"  AVISO: banco do total-recall-codex não encontrado em {SIBLING_DB_PATH} "
+                "— buscando só no total-recall.",
+                err=True,
+            )
+        ctx = recall_cross(query, engines, limit=limit, session_id=session)
 
     if fmt == "context":
         content = ctx.format_for_context()
@@ -229,6 +305,7 @@ def search(query, limit, session, fmt, output):
                 "score": r.score,
                 "role": r.role,
                 "sources": r.sources,
+                "origin": r.origin,
             })
         output = {
             "results": results,
@@ -264,7 +341,7 @@ def search(query, limit, session, fmt, output):
             sources_str = " + ".join(s.upper() for s in r.sources) if r.sources else "?"
             bar = _score_bar(r.score)
 
-            click.echo(f"  [{i}] {bar} {r.score:.2f} | {r.project_label} — {r.session_title}")
+            click.echo(f"  [{i}] {bar} {r.score:.2f} | {origin_label(r.origin)} {r.project_label} — {r.session_title}")
             click.echo(f"      Sessao {r.session_id[:8]} | {ts} ({age}) | {sources_str}")
 
             # Mostra trecho (primeiros 300 chars) com highlighting
