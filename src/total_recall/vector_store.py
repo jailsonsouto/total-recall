@@ -393,6 +393,45 @@ class SQLiteVectorStore:
 
         return [c[0] for c in candidates[:FUZZY_MAX_EXPANSIONS]]
 
+    def _find_compound_split(self, token: str, conn) -> Optional[str]:
+        """Tenta dividir um token colado (ex.: "ducklake") em duas palavras
+        que existem de verdade no vocabulário do corpus (ex.: "duck" +
+        "lake"). Só aceita a divisão se AMBAS as metades tiverem presença
+        real — evita splits sem sentido tipo "d" + "eltalake".
+
+        Achado real: "ducklake"/"deltalake" (nomes de produto colados) não
+        batem com "duck lake"/"delta lake" (como o termo real aparece no
+        corpus) nem via FTS5 literal (tokens diferentes) nem via vetor
+        (testado empiricamente — o termo raro/novo não ancora bem no espaço
+        de embedding mesmo com similaridade de cosseno isolada alta). Split
+        de palavra composta ataca a causa raiz (tokenização), não depende
+        de heurística de embedding.
+
+        Retorna a frase (ex.: "duck lake", sem aspas) pronta pra virar frase
+        FTS5, priorizando a divisão onde AMBAS as metades são mais comuns
+        (mín. doc_count entre as duas), ou None se nenhuma divisão válida
+        for encontrada.
+        """
+        vocab = self._get_fts_vocabulary(conn)
+        if not vocab or len(token) < 6:  # menor que "aa"+"aaaa" não vale a pena
+            return None
+
+        best = None
+        best_score = 0
+        for i in range(3, len(token) - 2):  # cada metade com pelo menos 3 chars
+            left, right = token[:i], token[i:]
+            left_count = vocab.get(left, 0)
+            right_count = vocab.get(right, 0)
+            if left_count > 0 and right_count > 0:
+                score = min(left_count, right_count)
+                if score > best_score:
+                    best_score = score
+                    best = (left, right)
+
+        if best is None:
+            return None
+        return f"{best[0]} {best[1]}"
+
     def _build_fts_query(self, query: str, conn) -> tuple[str, list[dict]]:
         """Constrói query FTS5 com abreviações + fuzzy em uma única passada.
 
@@ -427,23 +466,39 @@ class SQLiteVectorStore:
                 })
                 continue
 
-            # Prioridade 2: fuzzy — para typos e termos raros
+            # Prioridade 2: fuzzy (typos) + split de palavra composta —
+            # mesmo gatilho (termo raro/ausente), duas hipóteses diferentes
+            # sobre por que o termo digitado não bate: typo de um termo já
+            # existente (fuzzy) OU duas palavras coladas sem espaço, como
+            # nome de produto colado (split — ex.: "ducklake" → "duck lake").
             # Termos comuns (>10 docs) são usados literalmente.
-            # Termos raros (≤10 docs) ou ausentes podem ser typos → expandir.
             if len(clean) >= FUZZY_MIN_TOKEN_LENGTH:
                 vocab = self._get_fts_vocabulary(conn)
                 doc_count = vocab.get(clean, 0)
-                if doc_count <= 10:  # ausente ou raro → provável typo
+                if doc_count <= 10:  # ausente ou raro
                     fuzzy_variants = self._fuzzy_find_variants(clean, conn)
-                    if fuzzy_variants:
-                        all_forms = [clean] + fuzzy_variants
-                        group = " OR ".join(f'"{v}"' for v in all_forms)
+                    compound_split = self._find_compound_split(clean, conn)
+
+                    if fuzzy_variants or compound_split:
+                        all_forms = [f'"{clean}"'] + [f'"{v}"' for v in fuzzy_variants]
+                        if compound_split:
+                            all_forms.append(f'"{compound_split}"')
+                        group = " OR ".join(all_forms)
                         parts.append(f"({group})")
                         any_expansion = True
+
+                        # split primeiro na lista — a exibição trunca em
+                        # [:3] (cli.py/models.py), e o split é a informação
+                        # mais nova/relevante; não pode sumir da vista só
+                        # por ter sido adicionado depois das 5 variantes fuzzy
+                        exp_type = "fuzzy"
+                        expanded_list = ([compound_split] if compound_split else []) + list(fuzzy_variants)
+                        if compound_split:
+                            exp_type = "fuzzy+split" if fuzzy_variants else "split"
                         expansions.append({
                             "original": clean,
-                            "expanded": fuzzy_variants,
-                            "type": "fuzzy",
+                            "expanded": expanded_list,
+                            "type": exp_type,
                         })
                         continue
 

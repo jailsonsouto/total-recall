@@ -19,7 +19,7 @@ if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
 from .config import DATA_DIR, DB_PATH, EXPORTS_PATH, SESSIONS_ROOT, SIBLING_DB_PATH
 from .database import Database
 from .embeddings import get_embedding_provider
-from .models import highlight_text, origin_label, preview_window, extract_query_terms
+from .models import highlight_text, origin_label, preview_window, extract_query_terms, expansion_label
 
 
 def _score_bar(score: float, width: int = 10) -> str:
@@ -327,7 +327,7 @@ def search(query, limit, session, fmt, output, source):
         if expansions:
             exp_parts = []
             for exp in expansions:
-                label = "fuzzy" if exp["type"] == "fuzzy" else "abrev"
+                label = expansion_label(exp["type"])
                 targets = ", ".join(exp["expanded"][:3])
                 exp_parts.append(f"{label}: {exp['original']} → {targets}")
             click.echo(f"  Expansoes: {'; '.join(exp_parts)}\n")

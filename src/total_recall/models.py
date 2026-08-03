@@ -36,6 +36,22 @@ def origin_label(origin: str) -> str:
     return f"[{_ORIGIN_LABELS.get(origin, origin.upper())}]"
 
 
+_EXPANSION_TYPE_LABELS = {
+    "fuzzy": "fuzzy",
+    "abbreviation": "abrev",
+    "split": "composta",
+    "fuzzy+split": "fuzzy+composta",
+}
+
+
+def expansion_label(exp_type: str) -> str:
+    """Rótulo de exibição pro tipo de expansão de query — fallback pro
+    próprio valor se for um tipo novo ainda não mapeado, em vez de cair
+    silenciosamente em "abrev" por engano (bug real: um `else` genérico
+    rotularia "split" como abreviação)."""
+    return _EXPANSION_TYPE_LABELS.get(exp_type, exp_type)
+
+
 def highlight_text(text: str, terms: list[str],
                    mode: str = "ansi") -> str:
     """Aplica marcador de texto nos termos encontrados.
@@ -266,7 +282,7 @@ class RecallContext:
         if expansions:
             exp_parts = []
             for exp in expansions:
-                label = "fuzzy" if exp["type"] == "fuzzy" else "abrev"
+                label = expansion_label(exp["type"])
                 targets = ", ".join(exp["expanded"][:3])
                 exp_parts.append(f"{label}: {exp['original']} → {targets}")
             lines.append(f"*Expansões: {'; '.join(exp_parts)}*\n")
@@ -319,7 +335,7 @@ class RecallContext:
         if expansions:
             exp_parts = []
             for exp in expansions:
-                label = "fuzzy" if exp["type"] == "fuzzy" else "abrev"
+                label = expansion_label(exp["type"])
                 targets = ", ".join(exp["expanded"][:3])
                 exp_parts.append(f"{label}: {exp['original']} → {targets}")
             lines.append(f"*Expansões: {'; '.join(exp_parts)}*\n")
