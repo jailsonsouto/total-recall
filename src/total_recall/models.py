@@ -3,9 +3,24 @@ models.py — Estruturas de dados do Total Recall
 """
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
+
+
+def _strip_accents(text: str) -> str:
+    """Remove acentos/diacríticos — mesma normalização que o tokenizer
+    padrão do FTS5 (unicode61) já faz por padrão. Sem isso, um termo que
+    o FTS5 encontrou (índice já sem acento) pode não bater numa
+    comparação de string crua em Python, mesmo sendo o mesmo match —
+    achado real: "próximo" no conteúdo não batia com "proximo" (variante
+    fuzzy sem acento), fazendo a barra de cobertura mostrar ausente onde
+    era, na verdade, um match fuzzy real."""
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(c)
+    )
 
 
 # ══════════════════════════════════════════════════════════════
@@ -97,17 +112,18 @@ def term_coverage(content: str, query_terms: list[str],
     nível de match encontrado em `content`: "literal" (o termo em si
     aparece), "fuzzy" (só uma expansão fuzzy/abreviação dele aparece,
     via `expansions` — o mesmo `query_info["expansions"]` que já existe),
-    ou "ausente" (nenhum dos dois)."""
-    content_lower = content.lower()
+    ou "ausente" (nenhum dos dois). Comparação sem acento (mesma
+    normalização do tokenizer FTS5) — ver `_strip_accents`."""
+    content_folded = _strip_accents(content.lower())
     exp_map = {e["original"]: e.get("expanded", []) for e in expansions}
 
     levels = []
     for term in query_terms:
-        if term in content_lower:
+        if _strip_accents(term) in content_folded:
             levels.append("literal")
             continue
         variants = exp_map.get(term, [])
-        if any(v.lower() in content_lower for v in variants if v):
+        if any(_strip_accents(v.lower()) in content_folded for v in variants if v):
             levels.append("fuzzy")
         else:
             levels.append("ausente")

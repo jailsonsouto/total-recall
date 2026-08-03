@@ -56,6 +56,24 @@ class TestTermCoverage:
     def test_empty_query_terms(self):
         assert term_coverage("qualquer coisa", [], []) == []
 
+    def test_accent_insensitive_fuzzy_match(self):
+        """Achado real: query "proxmox" expandiu fuzzy pra "proximo" (sem
+        acento — mesma forma que o vocabulário do FTS5 guarda). Conteúdo
+        real tinha "Próximo check: 09:50" (com acento) — comparação de
+        string crua não batia, mesmo o FTS5 já tendo encontrado via
+        tokenizer que remove acento por padrão. A barra mostrava "ausente"
+        onde era, na verdade, um match fuzzy real."""
+        expansions = [{"original": "proxmox", "expanded": ["proximo", "promo"]}]
+        levels = term_coverage("Próximo check: 09:50", ["proxmox"], expansions)
+        assert levels == ["fuzzy"]
+
+    def test_accent_insensitive_literal_match(self):
+        """O mesmo vale pro match literal — se a query tem acento e o
+        conteúdo não (ou vice-versa), ainda conta como literal, porque o
+        FTS5 já trata os dois como o mesmo token."""
+        levels = term_coverage("uma analise completa", ["análise"], [])
+        assert levels == ["literal"]
+
 
 class TestRenderCoverageBar:
     def test_single_term_full_width(self):
