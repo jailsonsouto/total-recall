@@ -205,6 +205,20 @@ Termos: ①duckdb ②analista     █ literal · ▒ fuzzy/abrev · ░ ausente
 
 O `%` é relativo ao melhor resultado *desta busca* (topo = 100%) — comparável dentro da mesma lista, não entre buscas diferentes. Um resultado com os dois segmentos acesos (como o `[5]` acima) pode estar em posição inferior no ranking e ainda ser o match mais completo — a barra revela isso de cara, sem precisar ler o trecho.
 
+**Encadeia quantos termos quiser** — cada um vira um segmento na barra (testado até 4 sem problema):
+
+```bash
+total-recall search "sqlite vec fts5 ollama" --format table
+```
+```
+Termos: ①sqlite ②vec ③fts5 ④ollama     █ literal · ▒ fuzzy/abrev · ░ ausente
+
+1  [██|██|██|██] 100%  VECTOR + FTS5  CODEX        vozes-da-comunidade-v04 · 019fc2a6  1d
+3  [██|██|██|░░] 100%  VECTOR + FTS5  CLAUDE-CODE  AGENTES/CLAUDE · 31c6d284           4m
+```
+
+O motor trata múltiplos termos como alternativas ("ou", não "e" estrito) — por isso `[1]` e `[3]` empatam em score mas têm cobertura bem diferente (falta "ollama" no `[3]`). **Evite misturar um termo raro com uma palavra genérica demais** (tipo "próximo", "sistema") — ela domina o ranking sozinha e afoga o termo específico. Mais exemplos e a técnica completa de encadeamento em [docs/GUIA-USUARIO.md §11](docs/GUIA-USUARIO.md#11-format-table-lendo-a-barra-de-cobertura-e-encadeando-termos).
+
 ### Skill `/recall` dentro do Claude Code
 
 Após `total-recall init`, a skill `/recall` fica disponível em qualquer sessão:

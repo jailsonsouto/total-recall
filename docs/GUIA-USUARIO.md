@@ -16,6 +16,7 @@
 8. [Perguntas frequentes](#8-perguntas-frequentes)
 9. [Limites do sistema — quando "nenhum resultado" é a resposta correta](#9-limites-do-sistema--quando-nenhum-resultado-é-a-resposta-correta)
 10. [Busca cruzada com o total-recall-codex](#10-busca-cruzada-com-o-total-recall-codex)
+11. [`--format table`: lendo a barra de cobertura e encadeando termos](#11-format-table-lendo-a-barra-de-cobertura-e-encadeando-termos)
 
 ---
 
@@ -675,6 +676,120 @@ O piso de confiança é a mitigação certa para "termo ausente do corpus". Mas 
 - **Conceitos nunca discutidos**: se você nunca mencionou "netnografia" em nenhuma sessão, não há nada a recuperar. O sistema é memória — não inventa.
 - **Sessões não indexadas**: conteúdo de sessões que não passaram pelo `total-recall index` é invisível.
 - **Paráfrases sem sobreposição vetorial**: em casos raros, uma ideia pode ter sido expressa de forma tão diferente da query que nem o vetor consegue conectar. Nesses casos, tente reformular a query com outros termos.
+
+---
+
+## 11. `--format table`: lendo a barra de cobertura e encadeando termos
+
+### O problema que esse formato resolve
+
+O score combinado (vetor + FTS5, pesos que mudam com o tipo de query) não é comparável entre buscas diferentes — `0.24` numa busca não significa a mesma coisa que `0.24` noutra. `--format table` troca o score decimal bruto por um selo verificável, termo a termo:
+
+```bash
+total-recall search "sua query" --format table
+```
+
+```
+Termos: ①termo1 ②termo2     █ literal · ▒ fuzzy/abrev · ░ ausente
+
+#  Relevância          Fonte          Origem       Sessão                    Idade
+─  ──────────────────  ─────────────  ───────────  ─────────────────────    ─────
+1  [█████|░░░░░] 100%  VECTOR + FTS5  CLAUDE-CODE  projeto · abc12345       17d
+    ┃ trecho destacado do resultado...
+```
+
+- **`█`** — o termo bateu literal (exato, ignorando maiúscula/acento)
+- **`▒`** — só bateu via correção fuzzy (typo) ou palavra composta separada (ex.: `deltalake` → `delta lake`)
+- **`░`** — o termo não apareceu de jeito nenhum nesse resultado
+- **`%`** — relativo ao melhor resultado *dessa busca* (topo = 100%); não compare o `%` entre buscas diferentes, só dentro da mesma lista
+
+### Encadeando 2, 3 ou 4 termos relacionados
+
+O motor de busca trata múltiplos termos como alternativas (é "ou", não "e" estrito) — cada termo contribui pro ranking independente dos outros. Isso significa que **a barra de cobertura é a única forma prática de saber quais resultados batem em vários termos ao mesmo tempo**, já que a busca não filtra por "só quero os que têm todos".
+
+```bash
+# 2 termos
+total-recall search "duckdb analista" --format table
+
+# 3 termos
+total-recall search "sqlite vec ollama" --format table
+
+# 4 termos
+total-recall search "sqlite vec fts5 ollama" --format table
+```
+
+Com 4 termos específicos (nenhum genérico), a cobertura mostra o quadro completo numa olhada:
+
+```
+Termos: ①sqlite ②vec ③fts5 ④ollama     █ literal · ▒ fuzzy/abrev · ░ ausente
+
+#  Relevância          Fonte          Origem       Sessão                              Idade
+─  ──────────────────  ─────────────  ───────────  ──────────────────────────────────  ─────
+1  [██|██|██|██] 100%  VECTOR + FTS5  CODEX        vozes-da-comunidade-v04 · 019fc2a6  1d
+3  [██|██|██|░░] 100%  VECTOR + FTS5  CLAUDE-CODE  AGENTES/CLAUDE · 31c6d284           4m
+```
+
+`[1]` tem os 4 termos; `[3]` tem 3 de 4 (falta "ollama") — mesmo score de 100%, cobertura bem diferente. Sem a barra, os dois pareceriam igualmente bons.
+
+### Exemplo: o resultado certo nem sempre é o 1º colocado
+
+Esse é o caso que motivou o formato inteiro. Buscando "duckdb analista", os 4 primeiros resultados por score só têm "duckdb" — o 5º, com score menor, é o único que tem os dois termos juntos:
+
+```
+Termos: ①duckdb ②analista     █ literal · ▒ fuzzy/abrev · ░ ausente
+
+#  Relevância          Fonte          Origem       Sessão                              Idade
+─  ──────────────────  ─────────────  ───────────  ──────────────────────────────────  ─────
+1  [█████|░░░░░] 100%  VECTOR + FTS5  CLAUDE-CODE  subagents · agent-a0                17d
+2  [█████|░░░░░] 100%  VECTOR + FTS5  CLAUDE-CODE  comunidade/v04 · 3c43004b           17d
+5  [█████|█████] 82%   FTS5           CODEX        vozes-da-comunidade-v04 · 019f7028  17d
+```
+
+Sem a barra, `[5]` pareceria o pior resultado (menor score). Com ela, fica óbvio que é o único match completo.
+
+### Exemplo: dois termos, cobertura total
+
+Quando os termos aparecem sempre juntos no corpus (aconteceu bastante em conversas sobre "a Garimpeira" e "o chat"), a barra fica toda acesa — é o caso "chato" de confirmar, mas útil pra saber que não tem nada escondido:
+
+```bash
+total-recall search "chat garimpeira" --format table
+```
+```
+Termos: ①chat ②garimpeira     █ literal · ▒ fuzzy/abrev · ░ ausente
+
+1  [█████|█████] 100%  VECTOR + FTS5  CODEX        vozes-da-comunidade-v04 · 019f7028  17d
+2  [█████|█████]  99%  VECTOR + FTS5  CODEX        vozes-da-comunidade-v04 · 019fc27d   1d
+```
+
+### Exemplo: o nível `▒` (fuzzy) em ação
+
+Buscando um nome de produto colado sem espaço (`ducklake`), o sistema tenta a correção automática — e o trecho mostra de onde veio:
+
+```bash
+total-recall search "ducklake" --format table
+```
+```
+Termos: ①ducklake     █ literal · ▒ fuzzy/abrev · ░ ausente
+
+1  [██████████] 100%  VECTOR + FTS5  CODEX  vozes-da-comunidade-v04 · 019f7028  17d
+    ┃ ## Concorrência e DuckLake — O formato nativo do DuckDB funciona melhor...
+```
+
+Nesse corpus específico "DuckLake" é escrito como uma palavra só (como GitHub, YouTube) — por isso bateu `█` (literal) mesmo sem você saber disso de antemão. Se o termo real do corpus tivesse espaço (como "Delta Lake"), o sistema tenta automaticamente a versão separada e mostra `▒` pra indicar que foi uma correção, não um match exato.
+
+### Armadilha a evitar: misturar termo raro com termo genérico demais
+
+```bash
+total-recall search "deltalake próximo" --format table
+```
+```
+Termos: ①deltalake ②próximo     █ literal · ▒ fuzzy/abrev · ░ ausente
+
+1  [▒▒▒▒▒|█████] 100%  FTS5   CODEX        briefings · 019d917a       3m
+3  [░░░░░|█████]  99%  FTS5   CODEX        vozes-da-comunidade · 019d310c  4m
+```
+
+"Próximo" é uma palavra tão comum que domina o ranking sozinha — nenhum desses 5 resultados é realmente sobre Delta Lake (o `▒` do `[1]` bateu por coincidência, na palavra "detalha", não no produto). Buscar `deltalake` sozinho, sem "próximo", encontra o conteúdo real. **Lição prática**: encadeie termos que sejam todos específicos entre si; evite combinar um termo raro com uma palavra do dia a dia (próximo, sistema, modelo, dados).
 
 ---
 
