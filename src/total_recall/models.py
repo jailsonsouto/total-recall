@@ -29,11 +29,17 @@ _ORIGIN_LABELS = {
 }
 
 
+def origin_plain(origin: str) -> str:
+    """Rótulo de origem sem colchetes — pra colunas de tabela, onde o
+    cabeçalho já dá o contexto e os colchetes só adicionam ruído visual."""
+    return _ORIGIN_LABELS.get(origin, origin.upper())
+
+
 def origin_label(origin: str) -> str:
     """Selo de origem para exibição — sempre visível, nunca omitido pra
     'origem padrão': numa busca cruzada, marcar só o banco estrangeiro
     obriga o leitor a inferir o local pela ausência de marca."""
-    return f"[{_ORIGIN_LABELS.get(origin, origin.upper())}]"
+    return f"[{origin_plain(origin)}]"
 
 
 _EXPANSION_TYPE_LABELS = {
@@ -50,6 +56,82 @@ def expansion_label(exp_type: str) -> str:
     silenciosamente em "abrev" por engano (bug real: um `else` genérico
     rotularia "split" como abreviação)."""
     return _EXPANSION_TYPE_LABELS.get(exp_type, exp_type)
+
+
+# ══════════════════════════════════════════════════════════════
+# Barra de cobertura por termo — --format table
+# ══════════════════════════════════════════════════════════════
+#
+# Substitui o score decimal bruto (opaco, não comparável entre buscas —
+# ver APRENDIZADOS.md) por um selo verificável: pra cada termo da query,
+# mostra se ele bateu literal, só via fuzzy/abreviação, ou não apareceu.
+# Cada símbolo corresponde a um fato checável no próprio trecho, não a
+# uma conta interna. Desenhado com base em achado real (Haiku, 3 rodadas):
+# um modelo fraco lendo só o score bruto concluiu "isso é ruído" quando
+# o match era genuíno — a barra de cobertura resolve isso sem precisar
+# de julgamento sobre pesos/fórmulas internas.
+
+_COVERAGE_CHARS = {
+    "literal": "█",
+    "fuzzy": "▒",
+    "ausente": "░",
+}
+
+COVERAGE_LEGEND = "█ literal · ▒ fuzzy/abrev · ░ ausente"
+
+# Numeração circular pros termos na legenda (①②③...) — cai pra "(N)" além
+# do 20º termo, caso extremo que não deveria acontecer na prática.
+_CIRCLED_DIGITS = [chr(0x2460 + i) for i in range(20)]  # ① a ⑳
+
+
+def circled_number(n: int) -> str:
+    """①②③... pro n-ésimo termo (1-indexed); fallback "(N)" além de 20."""
+    if 1 <= n <= len(_CIRCLED_DIGITS):
+        return _CIRCLED_DIGITS[n - 1]
+    return f"({n})"
+
+
+def term_coverage(content: str, query_terms: list[str],
+                  expansions: list[dict]) -> list[str]:
+    """Pra cada termo em `query_terms` (na ordem digitada), retorna o
+    nível de match encontrado em `content`: "literal" (o termo em si
+    aparece), "fuzzy" (só uma expansão fuzzy/abreviação dele aparece,
+    via `expansions` — o mesmo `query_info["expansions"]` que já existe),
+    ou "ausente" (nenhum dos dois)."""
+    content_lower = content.lower()
+    exp_map = {e["original"]: e.get("expanded", []) for e in expansions}
+
+    levels = []
+    for term in query_terms:
+        if term in content_lower:
+            levels.append("literal")
+            continue
+        variants = exp_map.get(term, [])
+        if any(v.lower() in content_lower for v in variants if v):
+            levels.append("fuzzy")
+        else:
+            levels.append("ausente")
+    return levels
+
+
+def render_coverage_bar(levels: list[str], total_width: int = 10) -> str:
+    """Desenha a barra segmentada: um segmento por termo, `total_width`
+    caracteres divididos entre os segmentos (mesma largura total pra
+    todas as linhas de uma mesma busca, pra alinhar em coluna)."""
+    if not levels:
+        return "[]"
+    seg_width = max(1, total_width // len(levels))
+    segments = [_COVERAGE_CHARS.get(level, "░") * seg_width for level in levels]
+    return "[" + "|".join(segments) + "]"
+
+
+def relative_percent(score: float, top_score: float) -> int:
+    """Score relativo ao melhor resultado desta busca (top=100%) — não
+    comparável entre buscas diferentes, só dentro da mesma lista, onde
+    a comparação já é válida (é a mesma ordenação que gerou o ranking)."""
+    if top_score <= 0:
+        return 0
+    return round(min(1.0, score / top_score) * 100)
 
 
 def highlight_text(text: str, terms: list[str],

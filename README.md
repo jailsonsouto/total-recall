@@ -183,7 +183,27 @@ total-recall search "lancedb decisão" --format context --output minha-pesquisa.
 
 # Saída JSON para processamento externo
 total-recall search "fuzzy matching" --format json
+
+# Tabela com barra de cobertura por termo — qual termo bateu em qual resultado
+total-recall search "ASTE ABSA" --format table
 ```
+
+### `--format table`: cobertura por termo, não score decimal opaco
+
+O score combinado (vetor + FTS5, pesos adaptativos) não é comparável entre buscas diferentes — 0.24 numa busca não significa a mesma coisa que 0.24 noutra (o motivo é técnico: modo `fts5_dominant` vs `hybrid` mudam a fórmula). `--format table` resolve isso mostrando, pra cada termo da sua busca, se ele bateu **literal** (`█`), só via **fuzzy/abreviação** (`▒`), ou **não apareceu** (`░`) — um selo verificável, não uma conta interna:
+
+```
+Termos: ①duckdb ②analista     █ literal · ▒ fuzzy/abrev · ░ ausente
+
+#  Relevância          Fonte          Origem       Sessão                              Idade
+─  ──────────────────  ─────────────  ───────────  ──────────────────────────────────  ─────
+1  [█████|░░░░░] 100%  VECTOR + FTS5  CLAUDE-CODE  subagents · agent-a0                17d
+    ┃ ...trecho com "duckdb" mas sem "analista"...
+5  [█████|█████] 82%   FTS5           CODEX        vozes-da-comunidade-v04 · 019f7028  17d
+    ┃ ...trecho com os dois termos juntos...
+```
+
+O `%` é relativo ao melhor resultado *desta busca* (topo = 100%) — comparável dentro da mesma lista, não entre buscas diferentes. Um resultado com os dois segmentos acesos (como o `[5]` acima) pode estar em posição inferior no ranking e ainda ser o match mais completo — a barra revela isso de cara, sem precisar ler o trecho.
 
 ### Skill `/recall` dentro do Claude Code
 
@@ -387,7 +407,11 @@ total-recall/
 │   └── recall.md             # Definição da skill /recall
 ├── tests/
 │   ├── test_search.py        # Suite: fuzzy, highlighting, benchmark P95
-│   └── test_crossover.py     # Suite: banco read-only, recall_cross, origem nos formatos
+│   ├── test_crossover.py     # Suite: banco read-only, recall_cross, origem nos formatos
+│   ├── test_preview_window.py # Trecho centralizado no match, cobertura multi-termo
+│   ├── test_fts5_score.py    # Direção do score FTS5, dedup por chunk_id
+│   ├── test_compound_split.py # Split de palavra composta colada
+│   └── test_table_format.py  # Barra de cobertura ░▒█, --format table
 ├── docs/
 │   ├── GUIA-USUARIO.md       # Referência completa de sintaxe e exemplos
 │   ├── exemplos-clipping/    # Clippings reais do desenvolvimento

@@ -19,7 +19,12 @@ if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
 from .config import DATA_DIR, DB_PATH, EXPORTS_PATH, SESSIONS_ROOT, SIBLING_DB_PATH
 from .database import Database
 from .embeddings import get_embedding_provider
-from .models import highlight_text, origin_label, preview_window, extract_query_terms, expansion_label
+from .models import (
+    highlight_text, origin_label, origin_plain, preview_window,
+    extract_query_terms, expansion_label, term_coverage, render_coverage_bar,
+    relative_percent, circled_number, COVERAGE_LEGEND,
+)
+import textwrap
 
 
 def _score_bar(score: float, width: int = 10) -> str:
@@ -238,7 +243,7 @@ def backfill_embeddings():
 @click.option("--limit", "-n", default=5, help="Número de resultados")
 @click.option("--session", "-s", default=None, help="Filtrar por session ID")
 @click.option("--format", "-f", "fmt",
-              type=click.Choice(["rich", "context", "pointers", "json"]),
+              type=click.Choice(["rich", "context", "pointers", "json", "table"]),
               default="rich", help="Formato de saída")
 @click.option("--output", "-o", default=None,
               help="Salva resultado em arquivo Markdown (clipping)")
@@ -292,6 +297,11 @@ def search(query, limit, session, fmt, output, source):
         click.echo(content)
         if output:
             _save_clip(query, content, output)
+    elif fmt == "table":
+        _print_table_format(ctx, query)
+        if output:
+            clip_md = ctx.format_for_context()
+            _save_clip(query, clip_md, output)
     elif fmt == "json":
         import json
         results = []
@@ -382,6 +392,70 @@ def _save_clip(query: str, content: str, output: str):
     )
     path.write_text(header + content, encoding="utf-8")
     click.echo(f"\n  Clipping salvo: {path}", err=True)
+
+
+def _print_table_format(ctx, query: str):
+    """--format table: barra de cobertura por termo (░▒█) + tabela scanável
+    + trecho destacado abaixo de cada linha. Substitui o score decimal
+    bruto (opaco, não comparável entre buscas — ver APRENDIZADOS.md #57-59)
+    por um selo verificável: cada segmento da barra corresponde a um fato
+    checável (o termo N apareceu literal/via fuzzy/não apareceu), não a
+    uma conta interna de pesos."""
+    if not ctx.results:
+        click.echo(f"Nenhum resultado para: \"{query}\"")
+        return
+
+    use_color = sys.stdout.isatty()
+    query_terms = extract_query_terms(query)
+    expansions = ctx.query_info.get("expansions", [])
+    highlight_terms = _collect_highlight_terms(query, ctx.query_info)
+    top_score = ctx.results[0].score if ctx.results else 0.0
+
+    if query_terms:
+        legend = " ".join(
+            f"{circled_number(i)}{t}" for i, t in enumerate(query_terms, 1)
+        )
+        click.echo(f"Termos: {legend}     {COVERAGE_LEGEND}\n")
+
+    # Monta as linhas da tabela primeiro pra calcular largura de coluna
+    rows = []
+    for i, r in enumerate(ctx.results, 1):
+        levels = term_coverage(r.content, query_terms, expansions)
+        bar = render_coverage_bar(levels)
+        pct = relative_percent(r.score, top_score)
+        relevancia = f"{bar} {pct}%"
+        fonte = " + ".join(s.upper() for s in r.sources) if r.sources else "?"
+        origem = origin_plain(r.origin)
+        sessao = f"{r.project_label} · {r.session_id[:8]}" if r.project_label else r.session_id[:8]
+        idade = _age_label(r.timestamp).replace("ha ", "") if r.timestamp else "?"
+        rows.append({
+            "idx": str(i), "relevancia": relevancia, "fonte": fonte,
+            "origem": origem, "sessao": sessao, "idade": idade, "result": r,
+        })
+
+    headers = {"idx": "#", "relevancia": "Relevância", "fonte": "Fonte",
+               "origem": "Origem", "sessao": "Sessão", "idade": "Idade"}
+    cols = ["idx", "relevancia", "fonte", "origem", "sessao", "idade"]
+    widths = {
+        c: max(len(headers[c]), max((len(r[c]) for r in rows), default=0))
+        for c in cols
+    }
+
+    def _fmt_row(values: dict) -> str:
+        return "  ".join(values[c].ljust(widths[c]) for c in cols)
+
+    click.echo(_fmt_row(headers))
+    click.echo(_fmt_row({c: "─" * widths[c] for c in cols}))
+
+    for row in rows:
+        click.echo(_fmt_row(row))
+        r = row["result"]
+        preview = preview_window(r.content, query_terms, highlight_terms, width=280)
+        if use_color and highlight_terms:
+            preview = highlight_text(preview, highlight_terms, mode="ansi")
+        for line in textwrap.wrap(preview, width=78) or [""]:
+            click.echo(f"    ┃ {line}")
+        click.echo()
 
 
 def _collect_highlight_terms(query: str, query_info: dict) -> list[str]:

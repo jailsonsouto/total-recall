@@ -265,10 +265,22 @@ total-recall search "query" --format rich                # Visual (padrão)
 total-recall search "query" --format context --output -auto-        # Salva clipping automático
 total-recall search "query" --format context --output meu-clip.md  # Salva com nome manual
 total-recall search "query" --format pointers            # Ponteiros: 1 citação completa por sessão, resto resumido
+total-recall search "query" --format table               # Tabela com barra de cobertura por termo (░▒█)
 total-recall search "query" --source both                # Busca cruzada com o total-recall-codex (ver seção 10)
 ```
 
-O formato `context` é o mais útil dentro do Claude Code — produz um bloco Markdown estruturado pronto para ser interpretado pelo modelo. `pointers` é melhor quando a busca traz muitas sessões diferentes e você quer varrer rápido antes de aprofundar numa só.
+O formato `context` é o mais útil dentro do Claude Code — produz um bloco Markdown estruturado pronto para ser interpretado pelo modelo. `pointers` é melhor quando a busca traz muitas sessões diferentes e você quer varrer rápido antes de aprofundar numa só. **`table`** é o melhor pra decidir *qual* resultado vale a pena ler quando a query tem 2+ termos: cada segmento da barra mostra se aquele termo específico bateu literal (`█`), só via correção fuzzy (`▒`) ou não apareceu (`░`) — em vez do score decimal bruto, que não é comparável entre buscas diferentes (a fórmula muda com o modo de peso da query). Um resultado com todos os segmentos acesos é um match completo, mesmo que não seja o 1º colocado no ranking por score.
+
+```
+Termos: ①duckdb ②analista     █ literal · ▒ fuzzy/abrev · ░ ausente
+
+#  Relevância          Fonte          Origem       Sessão                              Idade
+─  ──────────────────  ─────────────  ───────────  ──────────────────────────────────  ─────
+1  [█████|░░░░░] 100%  VECTOR + FTS5  CLAUDE-CODE  subagents · agent-a0                17d
+    ┃ ...trecho com "duckdb" mas sem "analista"...
+5  [█████|█████] 82%   FTS5           CODEX        vozes-da-comunidade-v04 · 019f7028  17d
+    ┃ ...trecho com os dois termos juntos — o match completo de verdade...
+```
 
 Os clippings são salvos em `~/.total-recall/clips/` com cabeçalho de data/hora.
 
