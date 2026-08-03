@@ -60,6 +60,115 @@ def highlight_text(text: str, terms: list[str],
     return text
 
 
+# ══════════════════════════════════════════════════════════════
+# Preview truncado — janela centralizada no match, não no início
+# ══════════════════════════════════════════════════════════════
+#
+# Chunks podem ter até MAX_CHUNK_CHARS (1500 chars, config.py). Formatos
+# truncados (rich: 300 chars, pointers "rest": 120 chars) mostravam sempre
+# os primeiros N caracteres do chunk — se o termo buscado caísse depois
+# dessa janela (comum em chunks longos), o resultado parecia ruído mesmo
+# sendo um match genuíno e corretamente rankeado. Achado em produção:
+# `total-recall search "duckdb analista" --source both --format rich`
+# retornou 5 chunks corretos, mas nenhum preview mostrava "duckdb" ou
+# "analista" — os termos estavam lá, só fora da janela fixa de 300 chars.
+
+def extract_query_terms(query: str) -> list[str]:
+    """Termos literais digitados pelo usuário, sem expansões fuzzy/abreviação.
+    Usado para decidir onde centralizar o preview: uma expansão fuzzy ruidosa
+    (ex.: "wren" → "when", palavra comum) pode casar numa posição do texto
+    sem relação nenhuma com a busca real — a query literal é sinal mais
+    confiável de onde está o match relevante."""
+    terms = []
+    for word in query.lower().split():
+        clean = word.strip(".,!?;:")
+        if clean and len(clean) >= 2:
+            terms.append(clean)
+    return terms
+
+
+def _find_first_term_pos(content: str, terms: list[str]) -> Optional[int]:
+    """Posição do primeiro termo de `terms` que aparece em `content`
+    (case-insensitive), ou None se nenhum aparecer."""
+    escaped = [re.escape(t) for t in terms if t]
+    if not escaped:
+        return None
+    pattern = re.compile(f"({'|'.join(escaped)})", re.IGNORECASE)
+    match = pattern.search(content)
+    return match.start() if match else None
+
+
+def _find_term_positions(content: str, terms: list[str]) -> list[int]:
+    """Posição da primeira ocorrência de CADA termo distinto de `terms`
+    que aparece em `content` (uma por termo, não todas as ocorrências —
+    o suficiente pra saber o alcance da cobertura)."""
+    positions = []
+    for term in terms:
+        if not term:
+            continue
+        pos = _find_first_term_pos(content, [term])
+        if pos is not None:
+            positions.append(pos)
+    return positions
+
+
+def preview_window(content: str, priority_terms: list[str],
+                    fallback_terms: list[str], width: int = 300,
+                    max_width: Optional[int] = None) -> str:
+    """Janela de preview centralizada no(s) termo(s) encontrado(s) — não
+    sempre `content[:width]`.
+
+    Busca primeiro em `priority_terms` (a query literal); só cai para
+    `fallback_terms` (expansões fuzzy/abreviação, que podem ser ruidosas)
+    se nenhum termo literal aparecer no conteúdo. Se nada aparecer, faz
+    fallback para o comportamento antigo (começa do caractere 0) — melhor
+    mostrar algo do chunk do que nada.
+
+    Quando mais de um termo distinto aparece no conteúdo, tenta expandir a
+    janela (até `max_width`, padrão 2×`width`) pra cobrir do primeiro ao
+    último — um chunk com "duckdb" e "analista" a 400 chars de distância
+    ainda é um match completo, mas uma janela fixa de largura `width`
+    centralizada só no primeiro termo esconderia o segundo, fazendo o
+    resultado parecer parcial mesmo sendo genuíno. Se os termos estiverem
+    longe demais pra caber em `max_width`, cai de volta pra centralizar só
+    no primeiro — melhor mostrar um termo com clareza do que dois raspando
+    nas bordas.
+    """
+    if max_width is None:
+        max_width = width * 2
+
+    if len(content) <= width:
+        return content.replace("\n", " ")
+
+    positions = _find_term_positions(content, priority_terms)
+    if not positions:
+        positions = _find_term_positions(content, fallback_terms)
+
+    if not positions:
+        window = content[:width].replace("\n", " ")
+        return window + "..."
+
+    first_pos, last_pos = min(positions), max(positions)
+    span = last_pos - first_pos
+
+    if span > 0 and span <= (max_width - width):
+        center = (first_pos + last_pos) // 2
+        target_width = min(max_width, span + width)
+    else:
+        center = first_pos
+        target_width = width
+
+    half = target_width // 2
+    start = max(0, center - half)
+    end = min(len(content), start + target_width)
+    start = max(0, end - target_width)  # reajusta se a janela bateu no fim
+
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(content) else ""
+    window = content[start:end].replace("\n", " ")
+    return f"{prefix}{window}{suffix}"
+
+
 @dataclass
 class SessionInfo:
     """Metadados de uma sessão Claude Code."""
@@ -196,6 +305,7 @@ class RecallContext:
             lines.append(f"*Expansões: {'; '.join(exp_parts)}*\n")
 
         highlight_terms = self._collect_highlight_terms()
+        query_terms = extract_query_terms(self.query)
 
         for i, r in full:
             ts = r.timestamp.strftime("%d/%m/%Y %H:%M") if r.timestamp else "?"
@@ -212,9 +322,10 @@ class RecallContext:
             lines.append("### Ponteiros (drill-down sob demanda)")
             for i, r in rest:
                 ts = r.timestamp.strftime("%d/%m/%Y") if r.timestamp else "?"
-                preview = r.content[:120].replace("\n", " ")
-                if len(r.content) > 120:
-                    preview += "…"
+                # Trecho centralizado no match — mesma correção do formato
+                # rich: um preview sempre do caractere 0 podia esconder o
+                # termo buscado em chunks longos e parecer ruído sem ser.
+                preview = preview_window(r.content, query_terms, highlight_terms, width=120)
                 repeat = " (sessão já citada)" if r.session_id in quoted_sessions else ""
                 lines.append(
                     f"- [{i}] {origin_label(r.origin)} `{r.session_id[:8]}`{repeat} | {ts} | {r.score:.2f} | "

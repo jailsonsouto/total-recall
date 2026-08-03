@@ -19,7 +19,7 @@ if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
 from .config import DATA_DIR, DB_PATH, EXPORTS_PATH, SESSIONS_ROOT, SIBLING_DB_PATH
 from .database import Database
 from .embeddings import get_embedding_provider
-from .models import highlight_text, origin_label
+from .models import highlight_text, origin_label, preview_window, extract_query_terms
 
 
 def _score_bar(score: float, width: int = 10) -> str:
@@ -334,6 +334,7 @@ def search(query, limit, session, fmt, output, source):
 
         # Collect highlight terms
         highlight_terms = _collect_highlight_terms(query, ctx.query_info)
+        query_terms = extract_query_terms(query)
 
         for i, r in enumerate(ctx.results, 1):
             ts = r.timestamp.strftime("%d/%m/%Y %H:%M") if r.timestamp else "?"
@@ -344,10 +345,10 @@ def search(query, limit, session, fmt, output, source):
             click.echo(f"  [{i}] {bar} {r.score:.2f} | {origin_label(r.origin)} {r.project_label} — {r.session_title}")
             click.echo(f"      Sessao {r.session_id[:8]} | {ts} ({age}) | {sources_str}")
 
-            # Mostra trecho (primeiros 300 chars) com highlighting
-            preview = r.content[:300].replace("\n", " ")
-            if len(r.content) > 300:
-                preview += "..."
+            # Trecho centralizado no match — não sempre os primeiros 300 chars
+            # (chunks têm até 1500 chars; um match fora da janela fixa antiga
+            # parecia ruído mesmo sendo um resultado genuíno e bem rankeado)
+            preview = preview_window(r.content, query_terms, highlight_terms, width=300)
             if use_color and highlight_terms:
                 preview = highlight_text(preview, highlight_terms, mode="ansi")
             click.echo(f"      {preview}")
