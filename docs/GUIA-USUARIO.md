@@ -17,6 +17,7 @@
 9. [Limites do sistema — quando "nenhum resultado" é a resposta correta](#9-limites-do-sistema--quando-nenhum-resultado-é-a-resposta-correta)
 10. [Busca cruzada com o total-recall-codex](#10-busca-cruzada-com-o-total-recall-codex)
 11. [`--format table`: lendo a barra de cobertura e encadeando termos](#11-format-table-lendo-a-barra-de-cobertura-e-encadeando-termos)
+12. [Backup](#12-backup)
 
 ---
 
@@ -50,11 +51,13 @@ total-recall sessions
 
 ### O que fica de fora por padrão
 
-**Subagentes** (`subagents/*.jsonl`) são excluídos por padrão. São sessões curtas e ruidosas geradas automaticamente pelo Claude Code para tarefas específicas — geralmente mais ruído do que sinal. Para incluí-los:
+**Subagentes** (`subagents/*.jsonl`) são incluídos por padrão — conversas principais e sessões de sub-agentes/forks entram juntas na indexação. Subagentes ruidosos (ex.: eco de busca/síntese da própria skill `/recall`) são filtrados automaticamente por atribuição, não por serem subagentes em si. Para excluir subagentes inteiramente:
 
 ```bash
-total-recall index --subagents
+total-recall index --no-subagents
 ```
+
+Configurável também via variável de ambiente (`TOTAL_RECALL_INDEX_SUBAGENTS=false` desativa por padrão).
 
 **Sessões vazias** (0 mensagens) são indexadas mas produzem 0 chunks, então não aparecem em buscas.
 
@@ -248,10 +251,10 @@ total-recall search "como configurar o ambiente"
 ### `total-recall index`
 
 ```bash
-total-recall index                  # Incremental (só novos/alterados)
+total-recall index                  # Incremental (só novos/alterados); subagentes incluídos por padrão
 total-recall index --full           # Reindexar tudo do zero
-total-recall index --subagents      # Incluir sessões de subagentes
-total-recall index --full --subagents
+total-recall index --no-subagents   # Excluir sessões de subagentes
+total-recall index --full --no-subagents
 ```
 
 ### `total-recall search`
@@ -339,6 +342,16 @@ total-recall init
 ```
 
 Só precisa rodar uma vez (ou depois de reinstalar). Cria o banco de dados, os diretórios, e instala a skill `/recall` em `~/.claude/skills/recall/SKILL.md`.
+
+### `total-recall backup`
+
+```bash
+total-recall backup                              # Desktop (macOS) ou pergunta a pasta
+total-recall backup --output ~/backups           # Destino fixo, sem perguntar
+total-recall backup --output ~/backups --keep 7  # + mantém só os 7 mais recentes
+```
+
+Gera um único `.zip` com todos os bancos da máquina (`total-recall.db` e, se existir, o irmão `total-recall-codex.db`) via SQLite Backup API — seguro mesmo com o banco em uso. Detalhes completos na seção 12.
 
 ---
 
@@ -790,6 +803,41 @@ Termos: ①deltalake ②próximo     █ literal · ▒ fuzzy/abrev · ░ ausen
 ```
 
 "Próximo" é uma palavra tão comum que domina o ranking sozinha — nenhum desses 5 resultados é realmente sobre Delta Lake (o `▒` do `[1]` bateu por coincidência, na palavra "detalha", não no produto). Buscar `deltalake` sozinho, sem "próximo", encontra o conteúdo real. **Lição prática**: encadeie termos que sejam todos específicos entre si; evite combinar um termo raro com uma palavra do dia a dia (próximo, sistema, modelo, dados).
+
+---
+
+## 12. Backup
+
+O banco de dados é *derivado* — se for perdido, pode ser reconstruído do zero a partir dos JSONLs com `total-recall index --full`. Ainda assim, backup é útil para não perder tempo de reindexação (embeddings custam Ollama), especialmente antes de operações destrutivas.
+
+```bash
+total-recall backup
+```
+
+O que acontece:
+
+- Copia `total-recall.db` e, se existir nesta máquina, o irmão `total-recall-codex.db` — via SQLite Backup API, o que produz um snapshot consistente mesmo com o banco em uso (não é um `cp` ingênuo).
+- Compacta tudo num único `.zip` — o `.db` cru nunca fica no disco de destino, só o `.zip`. Redução típica de ~45–50% (o texto das sessões comprime bem; os embeddings, por serem ponto-flutuante, quase nada).
+- **Destino**: `~/Desktop/total-recall-backups/` no macOS, se a pasta Desktop existir. Caso contrário (SO diferente, ou Desktop ausente), pergunta a pasta interativamente.
+
+```bash
+total-recall backup --output ~/backups           # define o destino direto, sem perguntar
+total-recall backup --output ~/backups --keep 7  # + mantém só os 7 backups mais recentes
+```
+
+`--output` é obrigatório para automação (cron/launchd) — sem ele, o comando pode cair no prompt interativo e travar esperando entrada. `--keep N` remove os `.zip` mais antigos daquela pasta depois do backup atual, mantendo só os N mais recentes.
+
+Cada execução gera um arquivo `total-recall-backup-<timestamp>.zip` — backups não se sobrescrevem.
+
+### Restaurando
+
+```bash
+unzip total-recall-backup-2026-08-12_09-59-22.zip -d /tmp/restore
+cp /tmp/restore/total-recall.db ~/.total-recall/total-recall.db
+total-recall status   # confirma que o banco restaurado está íntegro
+```
+
+Para o procedimento completo (WAL/SHM residuais, migração entre máquinas, verificação de integridade), veja [docs/BACKUP-E-RESTAURACAO.md](BACKUP-E-RESTAURACAO.md).
 
 ---
 

@@ -510,3 +510,26 @@
     - Fix: `render_coverage_bar([])` agora retorna `"—"` (trace claro de "nada pra mostrar aqui, de propósito", não colchete vazio); `_print_table_format()` ganhou um `else` explícito explicando por que não há barra de cobertura nesse caso, em vez de omitir a linha silenciosamente
     - Validado ao vivo: `total-recall search "a" --format table` agora mostra "Termos: nenhum termo específico o suficiente pra medir cobertura — resultados ordenados só por relevância" e `—` em cada linha
     - **Onde**: `models.py` (`render_coverage_bar`), `cli.py` (`_print_table_format`), `tests/test_table_format.py`
+
+## 2026-08-12 — `total-recall backup` (comando nativo, compactado em .zip) + subagentes incluídos por padrão
+
+66. **`TOTAL_RECALL_INDEX_SUBAGENTS` — default trocado de `false` pra `true`**
+    - Pedido explícito do usuário: indexar conversas principais + subagentes juntos, sem precisar lembrar de `--subagents` toda vez. O filtro de ruído por atribuição (skill `recall`, ver item da sessão de crossover) continua ativo independente do default — o que mudou é só a inclusão/exclusão em massa
+    - Documentação (README, GUIA-USUARIO) tinha que ser atualizada em conjunto: a frase "excluídos por padrão" ficaria enganosa depois do flip. Flag oposta (`--no-subagents`) passou a ser a forma de opt-out
+    - **Onde**: `config.py:124`, `README.md`, `docs/GUIA-USUARIO.md` (seções 1 e 5)
+
+67. **`total-recall backup`: SQLite Backup API + compactação em .zip — não é `cp`, e não é a etapa intermediária crua**
+    - Requisito do usuário, refinado em duas rodadas: primeiro pedido foi "backup nativo, destino Desktop com fallback, cobrindo todos os bancos". Implementação inicial copiou os `.db` crus (via Backup API, seguro) pra uma subpasta com timestamp — mas o usuário já tinha pedido zip e a primeira entrega não zipou. Corrigido: agora o `.db` cru só existe numa pasta temporária do SO durante a execução, é compactado (`zipfile.ZIP_DEFLATED`) pra dentro de um único `.zip` e a pasta temporária é descartada — nunca sobra `.db` cru no destino
+    - Lição prática: quando o pedido já inclui uma característica específica ("zipado"), tratar como requisito obrigatório, não como "sugestão pra considerar depois" — a sugestão de compressão foi oferecida no fim da resposta anterior como item *extra* quando na verdade já fazia parte do pedido original
+    - Redução real medida com os dois bancos de produção (não sintético): 1103.5 MB → 570.2 MB (~48%) — texto de sessão comprime bem, embeddings (blobs float32) quase nada, por isso a redução fica bem abaixo do que zip costuma entregar em texto puro
+    - Resolução de destino: `~/Desktop/` se existir e o SO for macOS; caso contrário (SO diferente, ou Desktop ausente), pergunta interativamente — `--output` pula essa lógica inteira (necessário pra cron/launchd, senão trava esperando stdin). `--keep N` poda os `.zip` mais antigos da pasta depois do backup atual
+    - Módulo novo (`backup.py`) deliberadamente sem `import click` — só `cli.py` fala com o terminal (prompts, `click.progressbar`); o módulo de negócio fica testável sem simular tty/stdin. Mesma separação já usada em `indexer.py`/`cold_export.py`
+    - Validado com integridade real: `.zip` extraído, `PRAGMA integrity_check` = `ok` nos dois `.db`, contagem de linhas em `sessions`/`chunks` batendo com o banco original
+    - **Onde**: `backup.py` (módulo novo), `cli.py` (`backup` command), `tests/test_backup.py` (15 testes), `docs/BACKUP-E-RESTAURACAO.md`, `README.md`, `docs/GUIA-USUARIO.md` (seção 12 nova)
+
+68. **Ambiente: `pip` dentro de `~/.venvs/total-recall-py312/bin/` tem shebang apontando pro Python de outro venv (`total-recall-codex-py312`) — reinstalação foi parar silenciosamente no lugar errado**
+    - `~/.venvs/total-recall-py312/bin/pip --version` reportava rodando a partir de `total-recall-codex-py312/lib/.../pip` — pré-existente, não introduzido nesta sessão. `pip install --upgrade` executado com esse script instalou (com sucesso aparente, sem erro) dentro do site-packages do venv **errado**, deixando o pacote real (`total-recall-py312/site-packages/total_recall/`) intocado e desatualizado
+    - Diagnóstico: `head -1 <venv>/bin/pip` mostra o shebang real — comparar com `pyvenv.cfg`/`sys.executable` do próprio venv resolve a suspeita rápido
+    - Contorno: `python3 -m pip install ...` usa o interpretador do venv diretamente (`sys.executable`), ignorando o shebang do script `/bin/pip` — resolve sem precisar consertar o venv em si
+    - Efeito colateral verificado (não uma regressão): o venv `total-recall-codex-py312` já tinha uma cópia própria do pacote `total-recall` instalada (usada nos testes do repo `total-recall-codex`, que fazem `import total_recall`) — a reinstalação acidental só atualizou essa cópia pro código atual deste repo, sem quebrar `total-recall-codex --help` nem os imports
+    - **Onde**: nenhum código do projeto alterado — registrado aqui pra não repetir o diagnóstico do zero numa próxima sessão que precise reinstalar nesse venv específico

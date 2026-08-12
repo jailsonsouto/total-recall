@@ -713,6 +713,91 @@ def sessions(project):
 
 
 @main.command()
+@click.option("--output", "-o", type=click.Path(file_okay=False), default=None,
+              help="Diretório de destino (pula a lógica de Desktop/pergunta)")
+@click.option("--keep", type=int, default=None,
+              help="Mantém só os N backups mais recentes nessa pasta (remove os mais antigos)")
+def backup(output, keep):
+    """Backup seguro (SQLite Backup API) de todos os bancos, compactado em
+    um único .zip — total-recall.db e, se existir nesta máquina, o irmão
+    total-recall-codex.db. O .db cru nunca fica no disco de destino.
+
+    Sem --output: usa o Desktop do usuário no macOS; noutro SO, ou se o
+    Desktop não existir, pergunta a pasta de destino.
+    """
+    from .backup import backup_all, default_backup_root, prune_old_backups, estimate_pages
+
+    if output:
+        dest_root = Path(output).expanduser()
+        dest_root.mkdir(parents=True, exist_ok=True)
+    else:
+        dest_root = default_backup_root()
+        if dest_root is None:
+            click.echo("Pasta padrão (Desktop) não encontrada ou sistema não é macOS.")
+            while True:
+                answer = click.prompt("Informe a pasta de destino para o backup")
+                candidate = Path(answer).expanduser()
+                if candidate.is_dir():
+                    dest_root = candidate
+                    break
+                if click.confirm(f"'{candidate}' não existe. Criar?", default=True):
+                    candidate.mkdir(parents=True, exist_ok=True)
+                    dest_root = candidate
+                    break
+
+    click.echo(f"Destino: {dest_root}\n")
+
+    bars = {}
+
+    def on_before_db(label, src_path):
+        if not src_path.exists():
+            click.echo(f"  -- {label}: não encontrado em {src_path} (pulado)")
+            return
+        size_mb = src_path.stat().st_size / (1024 * 1024)
+        total_pages = estimate_pages(src_path)
+        bar = click.progressbar(length=total_pages or 1, label=f"  {label} ({size_mb:.0f} MB)")
+        bar.__enter__()
+        bars[label] = bar
+
+    def on_progress(label, done, total):
+        bar = bars.get(label)
+        if bar:
+            bar.update(done - bar.pos)
+
+    def on_compress_start():
+        click.echo("\n  Compactando em .zip...")
+
+    run = backup_all(
+        dest_root,
+        on_before_db=on_before_db,
+        on_progress=on_progress,
+        on_compress_start=on_compress_start,
+    )
+
+    for bar in bars.values():
+        bar.__exit__(None, None, None)
+
+    if not run.any_succeeded:
+        raise click.ClickException("Nenhum banco encontrado para backup — nada foi feito.")
+
+    zip_mb = run.zip_size_bytes / (1024 * 1024)
+    raw_mb = sum(r.size_bytes for r in run.results if r.included) / (1024 * 1024)
+    click.echo(f"\nBackup concluído: {run.zip_path}")
+    click.echo(f"  {zip_mb:.1f} MB compactado (de {raw_mb:.1f} MB)")
+    for result in run.results:
+        if result.included:
+            size_mb = result.size_bytes / (1024 * 1024)
+            click.echo(f"  - {result.label}: {size_mb:.1f} MB")
+
+    if keep is not None:
+        removed = prune_old_backups(dest_root, keep)
+        if removed:
+            click.echo(f"\nBackups antigos removidos ({len(removed)}):")
+            for f in removed:
+                click.echo(f"  - {f.name}")
+
+
+@main.command()
 @click.argument("session_id")
 def export(session_id):
     """Exporta uma sessão para Markdown."""

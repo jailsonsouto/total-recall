@@ -93,7 +93,53 @@ que produza um snapshot consistente (ver seções abaixo).
 
 ## Métodos de Backup
 
-### Método 1 — Backup via SQLite Online (recomendado)
+### Método 0 — Comando nativo `total-recall backup` (recomendado)
+
+O CLI tem um comando dedicado que já implementa o Método 1 abaixo (SQLite
+Backup API — snapshot consistente mesmo com o banco em uso e em WAL mode)
+para **todos** os bancos da máquina, não só o principal:
+
+```bash
+total-recall backup
+```
+
+O que ele faz:
+
+- Copia `total-recall.db` e, se existir nesta máquina, o irmão
+  `total-recall-codex.db` (ver `SIBLING_DB_PATH` em `config.py`) — bancos
+  ausentes são pulados, não é erro.
+- **Compacta tudo num único `.zip`** — o `.db` cru é gerado numa pasta
+  temporária do sistema só durante a execução e descartado assim que entra
+  no `.zip`; só o `.zip` sobra no destino. Redução típica de ~45-50% de
+  tamanho (dados de sessão/texto comprimem bem; embeddings, por serem
+  ponto-flutuante, quase nada).
+- Destino padrão: `~/Desktop/total-recall-backups/` no macOS. Se a pasta
+  Desktop não existir ou o SO não for macOS, pergunta a pasta de destino
+  interativamente.
+- `--output PATH` define a pasta de destino diretamente, pulando a
+  pergunta — necessário para uso não-interativo (cron/launchd, ver
+  "Automação de Backup" abaixo).
+- `--keep N` mantém só os N `.zip` mais recentes na pasta escolhida,
+  removendo os mais antigos após o backup atual.
+- Cada execução gera um arquivo `total-recall-backup-<timestamp>.zip`
+  (`YYYY-MM-DD_HH-MM-SS`) — múltiplos backups não se sobrescrevem.
+
+```bash
+# Exemplos
+total-recall backup                              # Desktop (macOS) ou pergunta
+total-recall backup --output ~/backups           # destino fixo, sem perguntar
+total-recall backup --output ~/backups --keep 7  # + poda automática
+```
+
+Para restaurar, descompacte o `.zip` (duplo clique no Finder, ou
+`unzip arquivo.zip`) e siga a seção "Restauração" abaixo a partir dos
+`.db` extraídos.
+
+Os métodos manuais abaixo continuam documentados como referência técnica
+(entender o mecanismo, ou compor um script próprio), mas não são mais
+necessários para o uso comum — o comando nativo já cobre o caso do dia a dia.
+
+### Método 1 — Backup via SQLite Online (mecanismo por trás do comando nativo)
 
 O SQLite possui um mecanismo nativo de backup online que produz um snapshot
 consistente mesmo com o banco em uso. É a abordagem mais segura.
@@ -173,8 +219,7 @@ precaução é sempre o mesmo:
 
 ```bash
 # 1. Backup do banco atual
-sqlite3 ~/.total-recall/total-recall.db \
-  ".backup ~/.total-recall/total-recall-pre-full-$(date +%Y%m%d).db"
+total-recall backup
 
 # 2. Executar a operação destrutiva
 total-recall index --full
@@ -227,12 +272,23 @@ com `total-recall index --full`.
 
 ### Restauração simples (mesmo dispositivo)
 
+Se o backup foi feito com `total-recall backup` (formato `.zip`), extrair
+primeiro:
+
+```bash
+unzip total-recall-backup-2026-08-12_09-59-22.zip -d /tmp/restore
+```
+
+Depois:
+
 ```bash
 # Parar qualquer processo usando o banco
 pkill -f total-recall 2>/dev/null || true
 
-# Substituir pelo backup
-cp ~/backups/total-recall-backup.db ~/.total-recall/total-recall.db
+# Substituir pelo backup extraído
+cp /tmp/restore/total-recall.db ~/.total-recall/total-recall.db
+# Se o irmão também foi restaurado:
+cp /tmp/restore/total-recall-codex.db ~/.total-recall-codex/total-recall-codex.db
 
 # Remover arquivos WAL/SHM residuais (se existirem)
 rm -f ~/.total-recall/total-recall.db-wal
@@ -312,7 +368,25 @@ O `TOTAL_RECALL_SESSIONS` permite apontar para o diretório correto se o
 
 ## Automação de Backup
 
-### Script de backup diário (macOS/launchd ou cron)
+### Via cron ou launchd (recomendado: comando nativo)
+
+Para automação (cron/launchd), sempre passar `--output` — sem ele, o comando
+pode cair no prompt interativo de pasta (ver Método 0) e travar esperando
+stdin. `--keep` substitui a lógica manual de poda:
+
+```bash
+total-recall backup --output "$HOME/Library/Mobile Documents/com~apple~CloudDocs/backups/total-recall" --keep 7
+```
+
+```cron
+# Backup diário às 02:00 — cobre total-recall.db e o irmão codex, se existir
+0 2 * * * /usr/local/bin/total-recall backup --output "$HOME/backups/total-recall" --keep 7 >> /tmp/total-recall-backup.log 2>&1
+```
+
+### Script manual equivalente (referência)
+
+Caso prefira controle direto sobre o comando `sqlite3` (sem depender do
+CLI do Total Recall), o mesmo resultado para o banco principal:
 
 ```bash
 #!/bin/bash
@@ -334,12 +408,9 @@ ls -t "$BACKUP_DIR"/total-recall-*.db | tail -n +8 | xargs rm -f 2>/dev/null
 echo "Backup: $DEST"
 ```
 
-### Via cron
-
-```cron
-# Backup diário às 02:00
-0 2 * * * /path/to/backup-total-recall.sh >> /tmp/total-recall-backup.log 2>&1
-```
+Diferença em relação ao comando nativo: este script cobre só
+`total-recall.db` — o irmão `total-recall-codex.db` ficaria de fora a
+menos que se adicione um segundo bloco `sqlite3 ... .backup` para ele.
 
 ---
 
@@ -347,11 +418,11 @@ echo "Backup: $DEST"
 
 | Situação | Ação |
 |---|---|
-| Antes de `--full` reindex | Backup com `.backup` do sqlite3 |
-| Antes de trocar modelo de embedding | Backup + documentar versão anterior |
+| Antes de `--full` reindex | `total-recall backup` |
+| Antes de trocar modelo de embedding | `total-recall backup` + documentar versão anterior |
 | Banco corrompido (integrity_check falha) | Deletar e reconstruir com `--full` |
 | Migração entre máquinas | Copiar JSONLs; reconstruir banco na destino |
-| Backup rotineiro | Script automático + `.backup` online |
+| Backup rotineiro | `total-recall backup --output PATH --keep N` via cron/launchd |
 | Verificação pós-restauração | `PRAGMA integrity_check` + `total-recall status` |
 
 ---

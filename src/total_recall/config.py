@@ -119,7 +119,8 @@ MMR_LAMBDA = 0.7
 MAX_CHUNK_CHARS = 1500       # ~375 tokens por chunk
 CHUNK_OVERLAP_CHARS = 200    # overlap entre chunks consecutivos
 
-# Indexar subagents por padrão? (geralmente ruidosos)
+# Indexar subagents por padrão? Ruído conhecido (ex.: eco da skill /recall)
+# já é filtrado por atribuição em session_discovery.py, independente disto.
 INDEX_SUBAGENTS = os.getenv(
-    "TOTAL_RECALL_INDEX_SUBAGENTS", "false"
+    "TOTAL_RECALL_INDEX_SUBAGENTS", "true"
 ).lower() == "true"

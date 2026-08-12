@@ -141,19 +141,19 @@ chmod +x ~/.local/bin/total-recall
 ### Indexação
 
 ```bash
-total-recall index                    # Incremental: só sessões novas ou modificadas
+total-recall index                    # Incremental: só sessões novas ou modificadas (subagentes incluídos por padrão)
 total-recall index --full             # Reindexação completa (necessário ao trocar modelo)
-total-recall index --subagents        # Inclui sessões de subagentes (excluídas por padrão)
+total-recall index --no-subagents     # Exclui sessões de subagentes
 ```
 
-**Subagentes por padrão:** configure para não precisar de `--subagents` toda vez:
+**Para excluir subagentes por padrão** (em vez de pedir `--no-subagents` toda vez):
 
 ```bash
-export TOTAL_RECALL_INDEX_SUBAGENTS=true
-total-recall index  # já inclui subagentes automaticamente
+export TOTAL_RECALL_INDEX_SUBAGENTS=false
+total-recall index  # já exclui subagentes automaticamente
 ```
 
-**O que é indexado de subagentes:** apenas subagentes significativos. Excluídos automaticamente:
+**O que é indexado de subagentes:** apenas subagentes significativos. Excluídos automaticamente mesmo com subagentes ativados:
 - Subagentes disparados pela skill `/recall` (eco de buscas/sínteses — ruído auto-contaminação)
 - Subagentes capturados com `attributionSkill` em uma lista de skills ruidosas
 
@@ -278,6 +278,16 @@ total-recall export 31c6d284
 total-recall status
 ```
 
+### Backup
+
+```bash
+total-recall backup                              # Desktop (macOS) ou pergunta a pasta
+total-recall backup --output ~/backups           # Destino fixo, sem perguntar (uso em cron/launchd)
+total-recall backup --output ~/backups --keep 7  # + mantém só os 7 backups mais recentes
+```
+
+Gera um único `.zip` com todos os bancos da máquina — `total-recall.db` e, se existir, o irmão `total-recall-codex.db` — via SQLite Backup API (snapshot consistente mesmo com o banco em uso, ao contrário de um `cp` ingênuo). O `.db` cru nunca fica no disco: é compactado e descartado, sobrando só o `.zip` (~45–50% menor). Detalhes e restauração em [docs/BACKUP-E-RESTAURACAO.md](docs/BACKUP-E-RESTAURACAO.md).
+
 ---
 
 ## Como funciona
@@ -287,7 +297,7 @@ total-recall status
 ```
 ~/.claude/projects/**/*.jsonl
          │
-         ▼ total-recall index [--subagents]
+         ▼ total-recall index [--no-subagents]
          │
          ├─ Discovery com fast-path (stat mtime vs SHA-256, 145 arquivos em 0.028s)
          │
@@ -416,6 +426,7 @@ total-recall/
 │   ├── indexer.py            # Orquestração: discover → parse → embed → store
 │   ├── recall_engine.py      # Temporal decay + role weights + MMR
 │   ├── cold_export.py        # Exportação de sessão para Markdown
+│   ├── backup.py             # Backup via SQLite Backup API, compactado em .zip
 │   └── cli.py                # Interface Click
 ├── skill/
 │   └── recall.md             # Definição da skill /recall
@@ -425,7 +436,8 @@ total-recall/
 │   ├── test_preview_window.py # Trecho centralizado no match, cobertura multi-termo
 │   ├── test_fts5_score.py    # Direção do score FTS5, dedup por chunk_id
 │   ├── test_compound_split.py # Split de palavra composta colada
-│   └── test_table_format.py  # Barra de cobertura ░▒█, --format table
+│   ├── test_table_format.py  # Barra de cobertura ░▒█, --format table
+│   └── test_backup.py        # Backup API, compactação em .zip, poda por --keep
 ├── docs/
 │   ├── GUIA-USUARIO.md       # Referência completa de sintaxe e exemplos
 │   ├── exemplos-clipping/    # Clippings reais do desenvolvimento
